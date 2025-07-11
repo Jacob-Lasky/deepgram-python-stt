@@ -536,8 +536,65 @@ h1 {
 
 .upload-container {
   display: flex;
+  flex-direction: column;
+  align-items: center;
+  width: 100%;
+  gap: 15px;
+}
+
+.upload-options {
+  display: flex;
   justify-content: center;
   width: 100%;
+}
+
+.stream-option {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: #fff;
+  cursor: pointer;
+  user-select: none;
+  font-size: 14px;
+}
+
+.stream-checkbox {
+  display: none;
+}
+
+.checkmark {
+  width: 18px;
+  height: 18px;
+  border: 2px solid #47aca9;
+  border-radius: 3px;
+  position: relative;
+  transition: all 0.2s ease;
+}
+
+.stream-checkbox:checked + .checkmark {
+  background-color: #47aca9;
+  border-color: #47aca9;
+}
+
+.stream-checkbox:checked + .checkmark::after {
+  content: "";
+  position: absolute;
+  left: 5px;
+  top: 2px;
+  width: 4px;
+  height: 8px;
+  border: solid white;
+  border-width: 0 2px 2px 0;
+  transform: rotate(45deg);
+}
+
+.stream-option:hover .checkmark {
+  border-color: #3d918e;
+}
+
+.stream-checkbox:checked + .checkmark:hover {
+  background-color: #3d918e;
+  border-color: #3d918e;
 }
 
 .upload-button {

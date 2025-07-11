@@ -2,6 +2,8 @@ import logging
 import os
 import json
 import base64
+import threading
+import time
 from flask import Flask, render_template, request, jsonify
 from flask_socketio import SocketIO
 from dotenv import load_dotenv
@@ -14,8 +16,10 @@ from deepgram import (
 from common.batch_audio import process_audio
 from common.audio_settings import detect_audio_settings
 import logging
-
 import sounddevice as sd
+from pydub import AudioSegment
+from pydub.utils import mediainfo
+import tempfile
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -43,11 +47,64 @@ config = DeepgramClientOptions(
 
 deepgram = None
 dg_connection = None
+streaming_thread = None
+stop_streaming = False
 
 # Flask routes
 @app.route("/")
 def index():
     return render_template("index.html")
+
+@app.route("/test")
+def test():
+    logger.info("Test endpoint called")
+    return jsonify({"status": "server is working", "timestamp": time.time()})
+
+@app.route("/upload_for_streaming", methods=["POST"])
+def upload_for_streaming():
+    """Upload file for streaming - separate from Socket.IO to avoid size limits"""
+    try:
+        logger.info("=== UPLOAD FOR STREAMING RECEIVED ===")
+        data = request.get_json()
+        
+        if not data or 'file' not in data:
+            return jsonify({"error": "No file data provided"}), 400
+            
+        file_data = data['file']
+        config = data.get('config', {})
+        
+        logger.info(f"File name: {file_data.get('name', 'unknown')}")
+        logger.info(f"Config: {config}")
+        
+        # Decode the base64 file data
+        if file_data['data'].startswith('data:'):
+            # Remove the data URL prefix
+            header, encoded = file_data['data'].split(',', 1)
+            file_content = base64.b64decode(encoded)
+        else:
+            file_content = base64.b64decode(file_data['data'])
+            
+        logger.info(f"Decoded file size: {len(file_content)} bytes")
+        
+        # Save the file temporarily
+        filename = file_data['name']
+        temp_dir = tempfile.gettempdir()
+        file_path = os.path.join(temp_dir, f"streaming_{int(time.time())}_{filename}")
+        
+        with open(file_path, 'wb') as f:
+            f.write(file_content)
+            
+        logger.info(f"File saved to: {file_path}")
+        
+        return jsonify({
+            "success": True,
+            "file_path": file_path,
+            "message": "File uploaded successfully for streaming"
+        })
+        
+    except Exception as e:
+        logger.error(f"Error in upload_for_streaming: {str(e)}")
+        return jsonify({"error": str(e)}), 500
 
 @app.route("/upload", methods=["POST"])
 def upload_file():
@@ -192,6 +249,83 @@ def handle_toggle_transcription(data):
 @socketio.on("connect")
 def server_connect():
     logger.info("Client connected")
+    
+@socketio.on("disconnect")
+def server_disconnect():
+    logger.info("Client disconnected")
+
+@socketio.on("test_event")
+def handle_test_event(data):
+    logger.info(f"Received test_event: {data}")
+    return {"status": "received", "data": data}
+
+@socketio.on("start_file_streaming")
+def handle_start_file_streaming(data, callback=None):
+    """Start streaming a file that was already uploaded"""
+    global streaming_thread, stop_streaming
+    
+    try:
+        logger.info("=== START FILE STREAMING EVENT RECEIVED ===")
+        logger.info(f"Data received: {data}")
+        
+        if not data or 'file_path' not in data:
+            error_msg = "No file_path provided"
+            logger.error(error_msg)
+            if callback:
+                callback({"error": error_msg})
+            return
+            
+        file_path = data['file_path']
+        config = data.get('config', {})
+        
+        logger.info(f"File path: {file_path}")
+        logger.info(f"Config: {config}")
+        
+        # Check if file exists
+        if not os.path.exists(file_path):
+            error_msg = f"File not found: {file_path}"
+            logger.error(error_msg)
+            if callback:
+                callback({"error": error_msg})
+            return
+            
+        # Stop any existing streaming
+        if streaming_thread and streaming_thread.is_alive():
+            logger.info("Stopping existing streaming thread")
+            stop_streaming = True
+            streaming_thread.join(timeout=5)
+            
+        # Reset stop flag
+        stop_streaming = False
+        
+        # Start streaming in a separate thread
+        streaming_thread = threading.Thread(
+            target=stream_audio_file_from_path,
+            args=(file_path, config)
+        )
+        streaming_thread.daemon = True
+        streaming_thread.start()
+        
+        logger.info("File streaming thread started")
+        
+        # Emit stream_started event
+        socketio.emit('stream_started', {
+            'message': 'File streaming started',
+            'file_path': file_path
+        })
+        
+        if callback:
+            callback({"success": True, "message": "Streaming started"})
+            
+    except Exception as e:
+        error_msg = f"Error starting file streaming: {str(e)}"
+        logger.error(error_msg)
+        logger.error(traceback.format_exc())
+        
+        socketio.emit('stream_error', {'error': error_msg})
+        
+        if callback:
+            callback({"error": error_msg})
 
 @socketio.on("restart_deepgram")
 def restart_deepgram():
@@ -274,6 +408,269 @@ def handle_file_upload(data, callback=None):
         error_response = {"error": str(e)}
         if callback:
             callback(error_response)
+
+@socketio.on("stream_file")
+def handle_stream_file(data, callback=None):
+    """Handle streaming of prerecorded files"""
+    logger.info("=== STREAM_FILE EVENT RECEIVED ===")
+    logger.info(f"Data type: {type(data)}")
+    logger.info(f"Data keys: {list(data.keys()) if data and isinstance(data, dict) else 'Not a dict or None'}")
+    logger.info(f"Callback provided: {callback is not None}")
+    
+    if data:
+        logger.info(f"Data length: {len(str(data))}")
+        if isinstance(data, dict):
+            for key, value in data.items():
+                if key == 'file' and isinstance(value, dict):
+                    logger.info(f"File data - name: {value.get('name', 'Unknown')}, data length: {len(value.get('data', ''))}")
+                elif key == 'config':
+                    logger.info(f"Config: {value}")
+                else:
+                    logger.info(f"{key}: {type(value)}")
+    
+    if "file" not in data:
+        error_msg = "Error: No file provided in stream_file data"
+        logger.warning(error_msg)
+        socketio.emit('stream_error', {'error': error_msg})
+        if callback:
+            callback({'error': error_msg})
+        return
+
+    file = data["file"]
+    if not file:
+        error_msg = "Error: Empty file object in stream_file"
+        logger.warning(error_msg)
+        socketio.emit('stream_error', {'error': error_msg})
+        if callback:
+            callback({'error': error_msg})
+        return
+
+    logger.info(f"Starting file stream: {file['name']}, data length: {len(file.get('data', ''))}")
+    logger.info(f"Config: {data.get('config', {})}")
+    
+    # Save file temporarily
+    temp_dir = "temp"
+    os.makedirs(temp_dir, exist_ok=True)
+    file_path = os.path.join(temp_dir, file["name"])
+    
+    try:
+        # Save the file
+        logger.info(f"Decoding file data...")
+        file_data = base64.b64decode(file["data"].split(",")[1])
+        logger.info(f"Decoded file size: {len(file_data)} bytes")
+        
+        with open(file_path, "wb") as f:
+            f.write(file_data)
+        logger.info(f"File saved for streaming: {file_path}")
+        
+        # Get configuration
+        config = data.get("config", {})
+        logger.info(f"Using config for streaming: {config}")
+        
+        # Reset stop flag and start streaming in a separate thread
+        global streaming_thread, stop_streaming
+        stop_streaming = False
+        logger.info("Starting streaming thread...")
+        
+        streaming_thread = threading.Thread(
+            target=stream_audio_file,
+            args=(file_path, config)
+        )
+        streaming_thread.daemon = True
+        streaming_thread.start()
+        
+        logger.info("Streaming thread started successfully")
+        
+        # Emit success event
+        socketio.emit('stream_started', {'message': 'File streaming started', 'filename': file['name']})
+        
+        if callback:
+            callback({'success': True, 'message': 'Streaming started'})
+        
+    except Exception as e:
+        error_msg = f"Error setting up file stream: {str(e)}"
+        logger.error(error_msg)
+        socketio.emit('stream_error', {'error': error_msg})
+        if os.path.exists(file_path):
+            os.remove(file_path)
+
+def stream_audio_file_from_path(file_path, config):
+    """Stream audio file from a file path"""
+    global stop_streaming
+    
+    try:
+        # Get API key
+        deepgram_api_key = API_KEY
+        if not deepgram_api_key:
+            raise ValueError("Deepgram API key not found")
+        
+        # Create a new Deepgram client for this streaming session
+        client_options = DeepgramClientOptions(
+            verbose=logging.INFO,
+            options={"keepalive": "true"},
+        )
+        
+        # Set custom endpoint if baseUrl is provided
+        if config.get('baseUrl') and config['baseUrl'] != 'api.deepgram.com':
+            client_options.url = f"https://{config['baseUrl']}"
+        
+        deepgram = DeepgramClient(deepgram_api_key, client_options)
+        logger.info("Created new Deepgram client for file streaming")
+        
+        # Get audio info
+        is_mulaw = file_path.lower().endswith(".mulaw")
+        
+        # Check if encoding is specified as mulaw in config
+        if config.get("encoding") == "mulaw":
+            is_mulaw = True
+        
+        if is_mulaw:
+            # Use format hints for mulaw files
+            sample_rate = int(config.get("sample_rate", 8000))
+            logger.info(f"Processing mulaw file with sample rate: {sample_rate}")
+            audio = AudioSegment.from_file(
+                file_path,
+                format="raw",
+                sample_width=1,  # 8-bit
+                channels=1,  # mono
+                frame_rate=sample_rate,
+            )
+            # Create minimal info dict since mediainfo will fail
+            info = {
+                "sample_rate": str(sample_rate),
+                "channels": "1",
+                "codec_name": "pcm_mulaw",
+                "codec_type": "audio",
+            }
+        else:
+            # Standard processing for other formats
+            audio = AudioSegment.from_file(file_path)
+            info = mediainfo(file_path)
+        
+        # Calculate streaming parameters
+        chunk_duration = 0.02  # 20ms chunks
+        try:
+            bit_rate = int(info["bit_rate"])
+        except (ValueError, KeyError):
+            bit_rate = 64000 * audio.channels
+        
+        byte_rate = bit_rate / 8
+        chunk_size = int(byte_rate * chunk_duration)
+        # Ensure chunk size is aligned to frame boundaries
+        bytes_per_sample = audio.sample_width * audio.channels
+        chunk_size = (chunk_size // bytes_per_sample) * bytes_per_sample
+        
+        logger.info(f"Starting audio stream: {file_path}, chunk_size: {chunk_size}")
+        
+        # Create WebSocket connection
+        dg_connection = deepgram.listen.websocket.v("1")
+        
+        # Set up event handlers
+        def on_message(self, result, **kwargs):
+            transcript = result.channel.alternatives[0].transcript
+            if not transcript:  # Skip empty transcripts
+                return
+            
+            if result.is_final:
+                # Emit final transcript to client
+                socketio.emit('transcript', {
+                    'transcript': transcript,
+                    'is_final': True,
+                    'channel': result.channel_index[0] if result.channel_index else 0
+                })
+            else:
+                # Emit interim transcript to client
+                socketio.emit('transcript', {
+                    'transcript': transcript,
+                    'is_final': False,
+                    'channel': result.channel_index[0] if result.channel_index else 0
+                })
+        
+        def on_error(self, error, **kwargs):
+            logger.error(f"Deepgram error: {error}")
+            socketio.emit('stream_error', {'error': str(error)})
+        
+        def on_close(self, close, **kwargs):
+            logger.info(f"Deepgram connection closed: {close}")
+        
+        def on_open(self, open, **kwargs):
+            logger.info(f"Deepgram connection opened: {open}")
+        
+        # Register event handlers
+        dg_connection.on(LiveTranscriptionEvents.Transcript, on_message)
+        dg_connection.on(LiveTranscriptionEvents.Error, on_error)
+        dg_connection.on(LiveTranscriptionEvents.Close, on_close)
+        dg_connection.on(LiveTranscriptionEvents.Open, on_open)
+        
+        # Prepare LiveOptions with config (filter out non-LiveOptions parameters)
+        live_config = {k: v for k, v in config.items() if k != 'baseUrl'}
+        live_options = LiveOptions(**live_config)
+        logger.info(f"Starting connection with options: {live_options}")
+        
+        # Start the connection
+        if not dg_connection.start(live_options):
+            raise Exception("Failed to start Deepgram connection")
+        
+        logger.info("Deepgram connection started, beginning audio streaming...")
+        
+        # Stream the audio
+        with open(file_path, "rb") as f:
+            while True:
+                # Check if streaming should be stopped
+                if stop_streaming:
+                    logger.info("Streaming stopped by user")
+                    break
+                    
+                data = f.read(chunk_size)
+                if not data:
+                    break
+                
+                dg_connection.send(data)
+                time.sleep(chunk_duration)
+        
+        # Finish the connection
+        logger.info("Finishing Deepgram connection...")
+        dg_connection.finish()
+        
+        logger.info("Finished streaming audio file")
+        
+        # Emit stream finished event
+        socketio.emit('stream_finished', {'message': 'File streaming completed'})
+        
+        # Clean up
+        if os.path.exists(file_path):
+            os.remove(file_path)
+            logger.info(f"Temporary file removed: {file_path}")
+            
+    except Exception as e:
+        error_msg = f"Error streaming audio file: {str(e)}"
+        logger.error(error_msg)
+        logger.exception("Full exception details:")
+        
+        # Emit error event
+        socketio.emit('stream_error', {'error': error_msg})
+        
+        if os.path.exists(file_path):
+            os.remove(file_path)
+            logger.info(f"Cleaned up temporary file after error: {file_path}")
+
+@socketio.on("stop_stream_file")
+def handle_stop_stream_file():
+    """Handle stopping of file streaming"""
+    global stop_streaming, streaming_thread
+    
+    logger.info("Received stop_stream_file request")
+    
+    # Set the stop flag
+    stop_streaming = True
+    
+    # Wait for the streaming thread to finish (with timeout)
+    if streaming_thread and streaming_thread.is_alive():
+        streaming_thread.join(timeout=2.0)
+        if streaming_thread.is_alive():
+            logger.warning("Streaming thread did not stop within timeout")
+    
+    logger.info("File streaming stopped")
 
 if __name__ == "__main__":
     logging.info("Starting combined Flask-SocketIO server")

@@ -1,4 +1,5 @@
 let isRecording = false;
+let isStreamingFile = false;
 let socket;
 let microphone;
 let audioContext;
@@ -7,6 +8,26 @@ let processor;
 let changedParams = new Set();
 // Track if we're in a post-import state
 let isImported = false;
+
+// Function to stop file streaming
+function stopFileStreaming() {
+    if (isStreamingFile) {
+        console.log('Stopping file streaming...');
+        socket.emit('stop_stream_file');
+        isStreamingFile = false;
+        document.body.classList.remove('recording');
+        
+        // Reset the record button
+        const recordButton = document.getElementById('record');
+        recordButton.checked = false;
+        
+        // Reset interim_results to the checkbox state
+        const config = getConfig();
+        updateRequestUrl(config);
+        
+        console.log('File streaming stopped');
+    }
+}
 
 let DEFAULT_CONFIG = {
     "base_url": "api.deepgram.com",
@@ -33,6 +54,90 @@ const socket_port = 8001;
 socket = io(
   "http://" + window.location.hostname + ":" + socket_port.toString()
 );
+
+// Add Socket.IO connection event logging
+socket.on('connect', () => {
+    console.log('Socket.IO connected successfully');
+    console.log('Socket ID:', socket.id);
+});
+
+socket.on('disconnect', (reason) => {
+    console.log('Socket.IO disconnected:', reason);
+});
+
+socket.on('connect_error', (error) => {
+    console.error('Socket.IO connection error:', error);
+});
+
+socket.on('reconnect', (attemptNumber) => {
+    console.log('Socket.IO reconnected after', attemptNumber, 'attempts');
+});
+
+socket.on('reconnect_error', (error) => {
+    console.error('Socket.IO reconnection error:', error);
+});
+
+// Listen for streaming events
+socket.on('stream_started', (data) => {
+    console.log('Stream started:', data);
+});
+
+socket.on('stream_error', (error) => {
+    console.error('Stream error:', error);
+    if (isStreamingFile) {
+        stopFileStreaming();
+    }
+});
+
+socket.on('stream_finished', (data) => {
+    console.log('Stream finished:', data);
+    if (isStreamingFile) {
+        stopFileStreaming();
+    }
+});
+
+// Listen for transcript events from file streaming
+socket.on('transcript', (data) => {
+    console.log('Received transcript:', data);
+    
+    const interimCaptions = document.getElementById("captions");
+    const finalCaptions = document.getElementById("finalCaptions");
+    
+    // Create interim message div with formatting similar to microphone streaming
+    const interimDiv = document.createElement("div");
+    const type = data.is_final ? "[Is Final]" : "[Interim Result]";
+    interimDiv.textContent = `${type} ${data.transcript}`;
+    interimDiv.className = data.is_final ? "final" : "interim";
+    
+    // Add to interim container
+    interimCaptions.appendChild(interimDiv);
+    interimDiv.scrollIntoView({ behavior: "smooth" });
+    
+    // Update final container
+    if (data.is_final) {
+        // Remove any existing interim span
+        const existingInterim = finalCaptions.querySelector('.interim-final');
+        if (existingInterim) {
+            existingInterim.remove();
+        }
+        // For final results, append as a new span
+        const finalDiv = document.createElement("span");
+        finalDiv.textContent = data.transcript + " ";
+        finalDiv.className = "final";
+        finalCaptions.appendChild(finalDiv);
+        finalDiv.scrollIntoView({ behavior: "smooth" });
+    } else {
+        // For interim results, update or create the interim span
+        let interimSpan = finalCaptions.querySelector('.interim-final');
+        if (!interimSpan) {
+            interimSpan = document.createElement("span");
+            interimSpan.className = "interim-final";
+            finalCaptions.appendChild(interimSpan);
+        }
+        interimSpan.textContent = data.transcript;
+        interimSpan.scrollIntoView({ behavior: "smooth" });
+    }
+});
 
 // Fetch default configuration
 fetch('../config/defaults.json')
@@ -660,14 +765,23 @@ document.addEventListener("DOMContentLoaded", () => {
 
     recordButton.addEventListener("change", async () => {
         if (recordButton.checked) {
-            try {
-                await startRecording();
-            } catch (error) {
-                console.error("Failed to start recording:", error);
-                recordButton.checked = false;
+            // Only start microphone recording if not already streaming a file
+            if (!isStreamingFile) {
+                try {
+                    await startRecording();
+                } catch (error) {
+                    console.error("Failed to start recording:", error);
+                    recordButton.checked = false;
+                }
             }
         } else {
-            await stopRecording();
+            // Stop both microphone recording and file streaming
+            if (isRecording) {
+                await stopRecording();
+            }
+            if (isStreamingFile) {
+                stopFileStreaming();
+            }
         }
     });
 
@@ -810,6 +924,18 @@ document.addEventListener("DOMContentLoaded", () => {
     
     // Function to process a file
     function processFile(file) {
+        const streamCheckbox = document.getElementById('streamPrerecorded');
+        const isStreamMode = streamCheckbox.checked;
+        
+        if (isStreamMode) {
+            streamPrerecordedFile(file);
+        } else {
+            uploadFile(file);
+        }
+    }
+    
+    // Function to upload file for batch processing
+    function uploadFile(file) {
         const reader = new FileReader();
         
         reader.onload = function(e) {
@@ -881,13 +1007,108 @@ document.addEventListener("DOMContentLoaded", () => {
         console.log('Starting to read file...');
         reader.readAsDataURL(file);
     }
+    
+    // Function to stream a prerecorded file
+    function streamPrerecordedFile(file) {
+        console.log(`Starting file streaming for: ${file.name}`);
+        
+        // Get current configuration
+        const config = getConfig();
+        // Force interim_results to true for file streaming
+        config.interim_results = true;
+        
+        // Update the UI to show interim_results is true
+        document.getElementById('interim_results').checked = true;
+        
+        // Update the URL display to show interim_results=true
+        updateRequestUrl(config);
+        
+        // Set streaming state and update UI
+        isStreamingFile = true;
+        const recordButton = document.getElementById('record');
+        recordButton.checked = true;
+        document.body.classList.add('recording');
+        
+        // Display the URL in the interim results container
+        const interimCaptions = document.getElementById('captions');
+        const urlDiv = document.createElement('div');
+        urlDiv.className = 'url-info';
+        const url = document.getElementById('requestUrl').textContent
+            .replace(/\s+/g, '') // Remove all whitespace including newlines
+            .replace(/&amp;/g, '&'); // Fix any HTML-encoded ampersands
+        urlDiv.textContent = `Streaming file: ${file.name} | Using URL: ${url}`;
+        interimCaptions.appendChild(urlDiv);
+        urlDiv.scrollIntoView({ behavior: 'smooth' });
+        
+        console.log(`File streaming config:`, config);
+        
+        // Step 1: Upload file via HTTP (to avoid Socket.IO size limits)
+        const reader = new FileReader();
+        reader.onload = function(e) {
+            console.log(`File loaded for upload, data length: ${e.target.result.length}`);
+            const fileData = {
+                name: file.name,
+                data: e.target.result
+            };
+            
+            console.log('Uploading file for streaming...');
+            
+            // Upload file via HTTP POST
+            fetch('/upload_for_streaming', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                },
+                body: JSON.stringify({
+                    file: fileData,
+                    config: config
+                })
+            })
+            .then(response => response.json())
+            .then(result => {
+                console.log('File upload response:', result);
+                
+                if (result.error) {
+                    console.error('File upload error:', result.error);
+                    stopFileStreaming();
+                    return;
+                }
+                
+                // Step 2: Start streaming via Socket.IO with just the file path
+                console.log('Starting streaming session...');
+                socket.emit('start_file_streaming', {
+                    file_path: result.file_path,
+                    config: config
+                }, (response) => {
+                    console.log('Start streaming response:', response);
+                    
+                    if (response && response.error) {
+                        console.error('Start streaming error:', response.error);
+                        stopFileStreaming();
+                    }
+                });
+            })
+            .catch(error => {
+                console.error('File upload error:', error);
+                stopFileStreaming();
+            });
+        };
+        
+        reader.onerror = function(e) {
+            console.error('Error reading file for streaming:', e);
+            stopFileStreaming();
+        };
+        
+        console.log('Starting to read file for upload...');
+        reader.readAsDataURL(file);
+    }
 
     // Add event listener for interim_results checkbox
     const interimResultsCheckbox = document.getElementById('interim_results');
     if (interimResultsCheckbox) {
         interimResultsCheckbox.addEventListener('change', function() {
-            // Only update URL if not recording
-            if (!isRecording) {
+            // Only update URL if not recording or streaming
+            if (!isRecording && !isStreamingFile) {
                 updateRequestUrl(getConfig());
             }
         });
@@ -971,6 +1192,21 @@ document.addEventListener("DOMContentLoaded", () => {
             // Show loading state
             audioSettingsDisplay.style.display = 'block';
             audioSettingsContent.innerHTML = '<div class="loading">Detecting audio settings...</div>';
+        });
+    }
+    
+    // Handle stream checkbox change
+    const streamCheckbox = document.getElementById('streamPrerecorded');
+    
+    if (streamCheckbox && uploadButton && dropZone) {
+        streamCheckbox.addEventListener('change', function() {
+            if (this.checked) {
+                uploadButton.innerHTML = '<i class="fas fa-play"></i> Stream Audio';
+                dropZone.innerHTML = '<i class="fas fa-play"></i><p>Drag & drop audio files to stream</p>';
+            } else {
+                uploadButton.innerHTML = '<i class="fas fa-upload"></i> Upload Audio';
+                dropZone.innerHTML = '<i class="fas fa-cloud-upload-alt"></i><p>Drag & drop audio files here</p>';
+            }
         });
     }
 });
