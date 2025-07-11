@@ -308,10 +308,19 @@ def handle_start_file_streaming(data, callback=None):
         
         logger.info("File streaming thread started")
         
-        # Emit stream_started event
+        # Get audio duration for progress tracking
+        try:
+            audio_info = AudioSegment.from_file(file_path)
+            duration_seconds = len(audio_info) / 1000.0
+        except Exception as e:
+            logger.warning(f"Could not get audio duration: {e}")
+            duration_seconds = 0
+        
+        # Emit stream_started event with duration
         socketio.emit('stream_started', {
             'message': 'File streaming started',
-            'file_path': file_path
+            'file_path': file_path,
+            'duration': duration_seconds
         })
         
         if callback:

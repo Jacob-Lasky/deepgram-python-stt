@@ -9,6 +9,11 @@ let changedParams = new Set();
 // Track if we're in a post-import state
 let isImported = false;
 
+// Global variables for progress tracking
+let streamingStartTime = 0;
+let streamingTimer = null;
+let estimatedDuration = 0;
+
 // Function to stop file streaming
 function stopFileStreaming() {
     if (isStreamingFile) {
@@ -21,12 +26,81 @@ function stopFileStreaming() {
         const recordButton = document.getElementById('record');
         recordButton.checked = false;
         
+        // Hide progress bar
+        hideStreamingProgress();
+        
         // Reset interim_results to the checkbox state
         const config = getConfig();
         updateRequestUrl(config);
         
         console.log('File streaming stopped');
     }
+}
+
+// Function to show streaming progress
+function showStreamingProgress(filename, duration = 0) {
+    const progressContainer = document.getElementById('streamingProgress');
+    const statusElement = document.getElementById('streamingStatus');
+    const detailsElement = document.getElementById('streamingDetails');
+    
+    estimatedDuration = duration;
+    streamingStartTime = Date.now();
+    
+    statusElement.textContent = 'Streaming Audio';
+    detailsElement.textContent = `File: ${filename}`;
+    
+    progressContainer.style.display = 'block';
+    
+    // Start timer
+    startStreamingTimer();
+}
+
+// Function to hide streaming progress
+function hideStreamingProgress() {
+    const progressContainer = document.getElementById('streamingProgress');
+    progressContainer.style.display = 'none';
+    
+    // Clear timer
+    if (streamingTimer) {
+        clearInterval(streamingTimer);
+        streamingTimer = null;
+    }
+}
+
+// Function to update streaming progress
+function updateStreamingProgress(status, details = '') {
+    const statusElement = document.getElementById('streamingStatus');
+    const detailsElement = document.getElementById('streamingDetails');
+    
+    if (status) statusElement.textContent = status;
+    if (details) detailsElement.textContent = details;
+}
+
+// Function to start streaming timer
+function startStreamingTimer() {
+    if (streamingTimer) clearInterval(streamingTimer);
+    
+    streamingTimer = setInterval(() => {
+        const elapsed = (Date.now() - streamingStartTime) / 1000;
+        const minutes = Math.floor(elapsed / 60);
+        const seconds = Math.floor(elapsed % 60);
+        
+        const timeElement = document.getElementById('streamingTime');
+        timeElement.textContent = `${minutes}:${seconds.toString().padStart(2, '0')}`;
+        
+        // Update progress bar if we have estimated duration
+        if (estimatedDuration > 0) {
+            const progress = Math.min((elapsed / estimatedDuration) * 100, 100);
+            const progressFill = document.getElementById('progressFill');
+            progressFill.style.width = `${progress}%`;
+        }
+    }, 1000);
+}
+
+// Function to set progress bar to specific percentage
+function setStreamingProgress(percentage) {
+    const progressFill = document.getElementById('progressFill');
+    progressFill.style.width = `${Math.min(percentage, 100)}%`;
 }
 
 let DEFAULT_CONFIG = {
@@ -80,20 +154,34 @@ socket.on('reconnect_error', (error) => {
 // Listen for streaming events
 socket.on('stream_started', (data) => {
     console.log('Stream started:', data);
+    const filename = data.file_path ? data.file_path.split('/').pop() : 'Unknown file';
+    showStreamingProgress(filename, data.duration || 0);
+    updateStreamingProgress('Streaming Audio', `Processing: ${filename}`);
 });
 
 socket.on('stream_error', (error) => {
     console.error('Stream error:', error);
-    if (isStreamingFile) {
-        stopFileStreaming();
-    }
+    updateStreamingProgress('Error', `Streaming failed: ${error.error || 'Unknown error'}`);
+    
+    // Hide progress after showing error
+    setTimeout(() => {
+        if (isStreamingFile) {
+            stopFileStreaming();
+        }
+    }, 3000);
 });
 
 socket.on('stream_finished', (data) => {
     console.log('Stream finished:', data);
-    if (isStreamingFile) {
-        stopFileStreaming();
-    }
+    updateStreamingProgress('Completed', 'File streaming finished successfully');
+    setStreamingProgress(100);
+    
+    // Hide progress after a delay
+    setTimeout(() => {
+        if (isStreamingFile) {
+            stopFileStreaming();
+        }
+    }, 2000);
 });
 
 // Listen for transcript events from file streaming
@@ -1053,6 +1141,10 @@ document.addEventListener("DOMContentLoaded", () => {
             
             console.log('Uploading file for streaming...');
             
+            // Show initial progress
+            showStreamingProgress(file.name);
+            updateStreamingProgress('Uploading', `Preparing ${file.name} for streaming...`);
+            
             // Upload file via HTTP POST
             fetch('/upload_for_streaming', {
                 method: 'POST',
@@ -1076,6 +1168,8 @@ document.addEventListener("DOMContentLoaded", () => {
                 
                 // Step 2: Start streaming via Socket.IO with just the file path
                 console.log('Starting streaming session...');
+                updateStreamingProgress('Connecting', 'Establishing connection to Deepgram...');
+                
                 socket.emit('start_file_streaming', {
                     file_path: result.file_path,
                     config: config
