@@ -65,6 +65,16 @@
                 <button type="button" id="detectSettingsButton" class="detect-settings-button">
                   <i class="fas fa-microphone-alt"></i> Detect Audio Settings
                 </button>
+                <div class="microphone-select-container">
+                  <label for="microphone-select">Select Microphone:</label>
+                  <select id="microphone-select" class="microphone-select">
+                    <option value="">Default Microphone</option>
+                    <!-- Options will be populated by JavaScript -->
+                  </select>
+                  <button type="button" id="refreshMicrophoneList" class="refresh-button">
+                    <i class="fas fa-sync"></i>
+                  </button>
+                </div>
                 <div id="audioSettingsDisplay" class="audio-settings-display" style="display: none;">
                   <h4>Audio Settings</h4>
                   <div id="audioSettingsContent"></div>

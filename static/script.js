@@ -206,7 +206,16 @@ socket.on("transcription_update", (data) => {
 
 async function getMicrophone() {
   try {
-    const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+    // Get the selected device ID from the dropdown if it exists
+    const microphoneSelect = document.getElementById('microphone-select');
+    const constraints = { audio: true };
+    
+    // If a specific microphone is selected, use that device ID
+    if (microphoneSelect && microphoneSelect.value) {
+      constraints.audio = { deviceId: { exact: microphoneSelect.value } };
+    }
+    
+    const stream = await navigator.mediaDevices.getUserMedia(constraints);
     return new MediaRecorder(stream, { mimeType: "audio/webm" });
   } catch (error) {
     console.error("Error accessing microphone:", error);
@@ -563,7 +572,7 @@ document.addEventListener("DOMContentLoaded", () => {
             const extraParams = document.getElementById('extraParams');
             const rawJson = extraParams.value || '{}';
             // Parse the raw JSON string to handle duplicate keys
-            const processedExtra = {};
+            const processedExtra = {}; ul
             const lines = rawJson.split('\n');
             lines.forEach(line => {
                 const match = line.match(/"([^"]+)":\s*"([^"]+)"/);
@@ -601,6 +610,53 @@ document.addEventListener("DOMContentLoaded", () => {
 
     // Initialize URL with current config instead of defaults
     updateRequestUrl(getConfig());
+
+    // Function to populate the microphone dropdown with available devices
+    async function populateMicrophoneList() {
+      try {
+        // First get permission to access media devices
+        await navigator.mediaDevices.getUserMedia({ audio: true });
+        
+        // Then enumerate devices
+        const devices = await navigator.mediaDevices.enumerateDevices();
+        const microphoneSelect = document.getElementById('microphone-select');
+        
+        // Store current selection if any
+        const currentSelection = microphoneSelect.value;
+        
+        // Clear all options except the default
+        while (microphoneSelect.options.length > 1) {
+          microphoneSelect.remove(1);
+        }
+        
+        // Add all audio input devices
+        const audioInputDevices = devices.filter(device => device.kind === 'audioinput');
+        audioInputDevices.forEach(device => {
+          const option = document.createElement('option');
+          option.value = device.deviceId;
+          option.text = device.label || `Microphone ${microphoneSelect.options.length}`;
+          microphoneSelect.appendChild(option);
+          
+          // If this was the previously selected device, select it again
+          if (device.deviceId === currentSelection) {
+            microphoneSelect.value = device.deviceId;
+          }
+        });
+        
+        console.log(`Found ${audioInputDevices.length} audio input devices`);
+      } catch (error) {
+        console.error('Error accessing media devices:', error);
+      }
+    }
+
+    // Populate the microphone list on page load
+    populateMicrophoneList();
+    
+    // Add event listener for the refresh button
+    const refreshButton = document.getElementById('refreshMicrophoneList');
+    if (refreshButton) {
+      refreshButton.addEventListener('click', populateMicrophoneList);
+    }
 
     recordButton.addEventListener("change", async () => {
         if (recordButton.checked) {
@@ -777,10 +833,19 @@ document.addEventListener("DOMContentLoaded", () => {
           
           console.log(`Sending file upload request with params:`, params);
           
-          socket.emit('upload_file', { 
-            file: fileData,
-            config: params
-          }, (result) => {
+          // Use regular HTTP POST instead of Socket.IO
+          fetch('/upload', {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+            },
+            body: JSON.stringify({
+              file: fileData,
+              config: params
+            })
+          })
+          .then(response => response.json())
+          .then(result => {
             console.log(`Received response:`, result);
             if (result.error) {
               console.error('Upload error:', result.error);
@@ -797,6 +862,9 @@ document.addEventListener("DOMContentLoaded", () => {
               finalCaptions.appendChild(finalDiv);
               finalDiv.scrollIntoView({ behavior: 'smooth' });
             }
+          })
+          .catch(error => {
+            console.error('Upload error:', error);
           });
         };
         

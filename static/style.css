@@ -593,7 +593,33 @@ h1 {
 
 /* Audio Settings Styles */
 .detect-settings-section {
-  margin-bottom: 20px;
+  margin-top: 15px;
+}
+
+.microphone-select-container {
+  margin-top: 10px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.microphone-select {
+  flex-grow: 1;
+  padding: 6px;
+  border-radius: 4px;
+  border: 1px solid #ccc;
+}
+
+.refresh-button {
+  background-color: #f0f0f0;
+  border: 1px solid #ccc;
+  border-radius: 4px;
+  padding: 6px 10px;
+  cursor: pointer;
+}
+
+.refresh-button:hover {
+  background-color: #e0e0e0;
 }
 
 .detect-settings-button {

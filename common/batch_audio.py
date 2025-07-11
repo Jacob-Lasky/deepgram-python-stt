@@ -3,6 +3,7 @@ import json
 import pandas as pd
 import os
 import logging
+import mimetypes
 
 logger = logging.getLogger("BatchAudio")
 
@@ -57,7 +58,12 @@ def process_audio(
             print(f"Error reading file: {str(e)}")
             raise
         json_data = None
-        content_type = "audio/wav"  # Default content type
+        # Detect content type from file extension
+        content_type, _ = mimetypes.guess_type(audio_path)
+        if not content_type or not content_type.startswith('audio/'):
+            # Default to audio/wav if we can't detect or it's not audio
+            content_type = "audio/wav"
+        print(f"Detected content type: {content_type}")
 
     headers = {
         "accept": "application/json",
@@ -70,6 +76,7 @@ def process_audio(
 
     # POST request
     try:
+        print(f"Making HTTPS request to: {deepgram_api_url}")
         response = requests.post(
             deepgram_api_url,
             params=params,
@@ -77,15 +84,30 @@ def process_audio(
             json=json_data,
             headers=headers,
             timeout=600,
+            verify=True  # Ensure SSL verification
         )
         print(f"Response status code: {response.status_code}")
-        print(f"Response headers: {response.headers}")
+        print(f"Response headers: {dict(response.headers)}")
 
         if response.status_code != 200:
             print(f"Error response: {response.text}")
+            print(f"Error response status: {response.status_code}")
+            # Try to parse error as JSON if possible
+            try:
+                error_json = response.json()
+                print(f"Error JSON: {error_json}")
+            except:
+                pass
+            # Still try to return the response for debugging
+            return {
+                "error": f"HTTP {response.status_code}: {response.text}",
+                "status_code": response.status_code
+            }
 
         response_json = response.json()
-        print(f"Response JSON: {response_json}")
+        print(f"Response JSON keys: {list(response_json.keys())}")
+        if verbose:
+            print(f"Full Response JSON: {response_json}")
 
         if "metadata" in response_json:
             if verbose:

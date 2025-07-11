@@ -49,6 +49,71 @@ dg_connection = None
 def index():
     return render_template("index.html")
 
+@app.route("/upload", methods=["POST"])
+def upload_file():
+    try:
+        data = request.get_json()
+        
+        if not data or "file" not in data:
+            logger.warning("Error: No file provided in request")
+            return jsonify({"error": "No file provided"}), 400
+
+        file_info = data["file"]
+        if not file_info:
+            logger.warning("Error: Empty file object")
+            return jsonify({"error": "No file selected"}), 400
+
+        logger.info(f"Received file: {file_info['name']}")
+        logger.info(f"File data length: {len(file_info['data'])}")
+
+        # Save file temporarily
+        temp_dir = "temp"
+        os.makedirs(temp_dir, exist_ok=True)
+        file_path = os.path.join(temp_dir, file_info["name"])
+        logger.info(f"Will save to: {file_path}")
+
+        # Save the file
+        try:
+            file_data = base64.b64decode(file_info["data"].split(",")[1])
+            logger.info(f"Decoded file size: {len(file_data)} bytes")
+            with open(file_path, "wb") as f:
+                f.write(file_data)
+            logger.info(f"File saved successfully to {file_path}")
+        except Exception as e:
+            logger.warning(f"Error saving file: {str(e)}")
+            return jsonify({"error": f"Error saving file: {str(e)}"}), 500
+
+        try:
+            # Use the config parameters from the client
+            params = data.get("config", {})
+            # Remove base_url as it's not needed for file processing
+            params.pop("baseUrl", None)
+            logger.info("Processing audio with HTTPS")
+            logger.info(f"File path: {file_path}")
+            logger.info(f"File size: {os.path.getsize(file_path)} bytes")
+            logger.info(f"Parameters: {params}")
+            
+            result = process_audio(file_path, params, verbose=True)
+            logger.info(f"Processing completed successfully")
+            logger.info(f"Result keys: {list(result.keys()) if isinstance(result, dict) else 'Not a dict'}")
+
+            # Clean up
+            os.remove(file_path)
+            logger.info(f"Temporary file removed: {file_path}")
+            
+            return jsonify(result)
+            
+        except Exception as e:
+            logger.warning(f"Error processing audio: {str(e)}")
+            if os.path.exists(file_path):
+                os.remove(file_path)
+                logger.info(f"Temporary file removed after error: {file_path}")
+            return jsonify({"error": str(e)}), 500
+            
+    except Exception as e:
+        logger.error(f"Unexpected error in upload endpoint: {str(e)}")
+        return jsonify({"error": "Internal server error"}), 500
+
 # Deepgram connection handling
 def initialize_deepgram_connection(config_options=None):
     global dg_connection, deepgram, config
@@ -140,15 +205,21 @@ def handle_detect_audio_settings():
     return settings
 
 @socketio.on("upload_file")
-def handle_file_upload(data):
+def handle_file_upload(data, callback=None):
     if "file" not in data:
         logger.warning("Error: No file provided in data")
-        return {"error": "No file provided"}, 400
+        error_response = {"error": "No file provided"}
+        if callback:
+            callback(error_response)
+        return
 
     file = data["file"]
     if not file:
         logger.warning("Error: Empty file object")
-        return {"error": "No file selected"}, 400
+        error_response = {"error": "No file selected"}
+        if callback:
+            callback(error_response)
+        return
 
     logger.info(f"Received file: {file['name']}")
     logger.info(f"File data length: {len(file['data'])}")
@@ -168,28 +239,41 @@ def handle_file_upload(data):
         logger.info(f"File saved successfully to {file_path}")
     except Exception as e:
         logger.warning(f"Error saving file: {str(e)}")
-        return {"error": f"Error saving file: {str(e)}"}, 500
+        error_response = {"error": f"Error saving file: {str(e)}"}
+        if callback:
+            callback(error_response)
+        return
 
     try:
         # Use the config parameters from the client
         params = data.get("config", {})
         # Remove base_url as it's not needed for file processing
         params.pop("baseUrl", None)
-        logger.info("Processing audio")
-        logger.debug(f"- with params: {params}")
-        result = process_audio(file_path, params)
-        logger.info(f"Processing result: {result}")
+        logger.info("Processing audio with HTTPS")
+        logger.info(f"File path: {file_path}")
+        logger.info(f"File size: {os.path.getsize(file_path)} bytes")
+        logger.info(f"Parameters: {params}")
+        
+        result = process_audio(file_path, params, verbose=True)
+        logger.info(f"Processing completed successfully")
+        logger.info(f"Result keys: {list(result.keys()) if isinstance(result, dict) else 'Not a dict'}")
 
         # Clean up
         os.remove(file_path)
         logger.info(f"Temporary file removed: {file_path}")
-        return result
+        
+        # Call the callback with the result
+        if callback:
+            callback(result)
+        
     except Exception as e:
         logger.warning(f"Error processing audio: {str(e)}")
         if os.path.exists(file_path):
             os.remove(file_path)
             logger.info(f"Temporary file removed after error: {file_path}")
-        return {"error": str(e)}, 500
+        error_response = {"error": str(e)}
+        if callback:
+            callback(error_response)
 
 if __name__ == "__main__":
     logging.info("Starting combined Flask-SocketIO server")
