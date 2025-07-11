@@ -13,6 +13,8 @@ let isImported = false;
 let streamingStartTime = 0;
 let streamingTimer = null;
 let estimatedDuration = 0;
+let audioPlayer = null;
+let isAudioMuted = false;
 
 // Function to stop file streaming
 function stopFileStreaming() {
@@ -26,8 +28,9 @@ function stopFileStreaming() {
         const recordButton = document.getElementById('record');
         recordButton.checked = false;
         
-        // Hide progress bar
+        // Hide progress bar and stop audio
         hideStreamingProgress();
+        stopAudioPlayback();
         
         // Reset interim_results to the checkbox state
         const config = getConfig();
@@ -103,6 +106,83 @@ function setStreamingProgress(percentage) {
     progressFill.style.width = `${Math.min(percentage, 100)}%`;
 }
 
+// Function to setup audio player for streaming
+function setupAudioPlayer(audioBlob, filename) {
+    const audioPlayerContainer = document.getElementById('audioPlayerContainer');
+    const streamingAudio = document.getElementById('streamingAudio');
+    const toggleAudioBtn = document.getElementById('toggleAudioBtn');
+    
+    // Create object URL for the audio blob
+    const audioUrl = URL.createObjectURL(audioBlob);
+    streamingAudio.src = audioUrl;
+    
+    // Store reference to audio player
+    audioPlayer = streamingAudio;
+    
+    // Show audio player
+    audioPlayerContainer.style.display = 'block';
+    
+    // Setup toggle button
+    toggleAudioBtn.onclick = toggleAudioMute;
+    
+    // Set initial volume
+    streamingAudio.volume = isAudioMuted ? 0 : 0.7;
+    
+    console.log('Audio player setup complete for:', filename);
+}
+
+// Function to start synchronized audio playback
+function startAudioPlayback() {
+    if (audioPlayer) {
+        audioPlayer.currentTime = 0;
+        audioPlayer.play().catch(error => {
+            console.log('Audio autoplay prevented:', error);
+            // Show a message to user that they need to click play
+            updateStreamingProgress('Ready to Play', 'Click the play button to hear audio while streaming');
+        });
+    }
+}
+
+// Function to stop audio playback
+function stopAudioPlayback() {
+    if (audioPlayer) {
+        audioPlayer.pause();
+        audioPlayer.currentTime = 0;
+    }
+    
+    // Hide audio player
+    const audioPlayerContainer = document.getElementById('audioPlayerContainer');
+    audioPlayerContainer.style.display = 'none';
+    
+    // Clean up object URL
+    if (audioPlayer && audioPlayer.src) {
+        URL.revokeObjectURL(audioPlayer.src);
+    }
+    
+    audioPlayer = null;
+}
+
+// Function to toggle audio mute
+function toggleAudioMute() {
+    const toggleBtn = document.getElementById('toggleAudioBtn');
+    const icon = toggleBtn.querySelector('i');
+    
+    isAudioMuted = !isAudioMuted;
+    
+    if (audioPlayer) {
+        audioPlayer.volume = isAudioMuted ? 0 : 0.7;
+    }
+    
+    // Update button appearance
+    if (isAudioMuted) {
+        icon.className = 'fas fa-volume-mute';
+        toggleBtn.classList.add('muted');
+    } else {
+        icon.className = 'fas fa-volume-up';
+        toggleBtn.classList.remove('muted');
+    }
+}
+
 let DEFAULT_CONFIG = {
     "base_url": "api.deepgram.com",
     "model": "nova-3",
@@ -157,6 +237,11 @@ socket.on('stream_started', (data) => {
     const filename = data.file_path ? data.file_path.split('/').pop() : 'Unknown file';
     showStreamingProgress(filename, data.duration || 0);
     updateStreamingProgress('Streaming Audio', `Processing: ${filename}`);
+    
+    // Start audio playback if audio player is set up
+    if (audioPlayer) {
+        startAudioPlayback();
+    }
 });
 
 socket.on('stream_error', (error) => {
@@ -1144,6 +1229,10 @@ document.addEventListener("DOMContentLoaded", () => {
             // Show initial progress
             showStreamingProgress(file.name);
             updateStreamingProgress('Uploading', `Preparing ${file.name} for streaming...`);
+            
+            // Setup audio player with the file for synchronized playback
+            const audioBlob = new Blob([new Uint8Array(atob(e.target.result.split(',')[1]).split('').map(c => c.charCodeAt(0)))], {type: file.type});
+            setupAudioPlayer(audioBlob, file.name);
             
             // Upload file via HTTP POST
             fetch('/upload_for_streaming', {

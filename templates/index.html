@@ -52,6 +52,19 @@
                 <span id="streamingDetails">Initializing...</span>
               </div>
             </div>
+            
+            <!-- Audio Player for Streaming Playback -->
+            <div id="audioPlayerContainer" class="audio-player-container" style="display: none;">
+              <div class="audio-player-header">
+                <span class="audio-player-title">🎵 Now Playing</span>
+                <button id="toggleAudioBtn" class="toggle-audio-btn">
+                  <i class="fas fa-volume-up"></i>
+                </button>
+              </div>
+              <audio id="streamingAudio" class="streaming-audio" controls>
+                Your browser does not support the audio element.
+              </audio>
+            </div>
             <div id="dropZone" class="drop-zone">
               <i class="fas fa-cloud-upload-alt"></i>
               <p>Drag & drop audio files here</p>

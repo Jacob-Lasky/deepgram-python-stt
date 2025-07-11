@@ -690,6 +690,80 @@ h1 {
     opacity: 0.9;
 }
 
+/* Audio Player for Streaming */
+.audio-player-container {
+    margin-top: 15px;
+    padding: 15px;
+    background: linear-gradient(135deg, #1e3a8a 0%, #3730a3 100%);
+    border-radius: 10px;
+    color: white;
+    box-shadow: 0 3px 10px rgba(30, 58, 138, 0.3);
+    animation: slideIn 0.3s ease-out;
+}
+
+.audio-player-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 10px;
+}
+
+.audio-player-title {
+    font-size: 14px;
+    font-weight: 600;
+    color: #e0e7ff;
+}
+
+.toggle-audio-btn {
+    background: rgba(255, 255, 255, 0.1);
+    border: 1px solid rgba(255, 255, 255, 0.2);
+    color: white;
+    padding: 5px 8px;
+    border-radius: 5px;
+    cursor: pointer;
+    transition: all 0.2s ease;
+    font-size: 12px;
+}
+
+.toggle-audio-btn:hover {
+    background: rgba(255, 255, 255, 0.2);
+    border-color: rgba(255, 255, 255, 0.3);
+}
+
+.toggle-audio-btn.muted {
+    background: rgba(239, 68, 68, 0.2);
+    border-color: rgba(239, 68, 68, 0.3);
+}
+
+.streaming-audio {
+    width: 100%;
+    height: 35px;
+    border-radius: 5px;
+    outline: none;
+}
+
+/* Custom audio player styling */
+.streaming-audio::-webkit-media-controls-panel {
+    background-color: rgba(255, 255, 255, 0.1);
+}
+
+.streaming-audio::-webkit-media-controls-play-button,
+.streaming-audio::-webkit-media-controls-pause-button {
+    background-color: rgba(255, 255, 255, 0.8);
+    border-radius: 50%;
+}
+
+.streaming-audio::-webkit-media-controls-timeline {
+    background-color: rgba(255, 255, 255, 0.2);
+    border-radius: 2px;
+}
+
+.streaming-audio::-webkit-media-controls-current-time-display,
+.streaming-audio::-webkit-media-controls-time-remaining-display {
+    color: white;
+    text-shadow: 1px 1px 1px rgba(0, 0, 0, 0.5);
+}
+
 .upload-button {
   background-color: #4CAF50;
   color: white;
