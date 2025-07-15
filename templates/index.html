@@ -127,20 +127,51 @@
                   <label>Language:
                     <input type="text" id="language" value="en" placeholder="en">
                   </label>
-                  <label>Utterance End (ms):
-                    <input type="text" id="utterance_end_ms" placeholder="1000">
+                  <label>Utterance End:
+                    <input type="text" id="utterance_end" placeholder="1000">
                   </label>
                   <label>Endpointing:
                     <input type="text" id="endpointing" placeholder="10">
                   </label>
                   <label>Encoding:
-                    <input type="text" id="encoding" placeholder="">
+                    <select id="encoding">
+                      <option value="">Select encoding...</option>
+                      <option value="linear16">linear16</option>
+                      <option value="linear32">linear32</option>
+                      <option value="flac">flac</option>
+                      <option value="alaw">alaw</option>
+                      <option value="mulaw">mulaw</option>
+                      <option value="amr-nb">amr-nb</option>
+                      <option value="amr-wb">amr-wb</option>
+                      <option value="opus">opus</option>
+                      <option value="ogg-opus">ogg-opus</option>
+                      <option value="speex">speex</option>
+                      <option value="g729">g729</option>
+                    </select>
                   </label>
                   <label>Channels:
                     <input type="number" id="channels" placeholder="1">
                   </label>
                   <label>Sample Rate:
                     <input type="number" id="sample_rate" placeholder="16000">
+                  </label>
+                  <label>Callback URL:
+                    <input type="text" id="callback" placeholder="">
+                  </label>
+                  <label>Keywords:
+                    <input type="text" id="keywords" placeholder="">
+                  </label>
+                  <label>Replace:
+                    <input type="text" id="replace" placeholder="">
+                  </label>
+                  <label>Search:
+                    <input type="text" id="search" placeholder="">
+                  </label>
+                  <label>Tags:
+                    <input type="text" id="tags" placeholder="">
+                  </label>
+                  <label>Version:
+                    <input type="text" id="version" placeholder="latest">
                   </label>
                 </div>
                 <div class="config-group boolean-inputs">
@@ -163,15 +194,38 @@
                     <input type="checkbox" id="profanity_filter"> Profanity Filter
                   </label>
                   <label>
-                    <input type="checkbox" id="redact"> Redact
+                    <input type="checkbox" id="punctuate"> Punctuate
                   </label>
                   <label>
-                    <input type="checkbox" id="punctuate"> Punctuate
+                    <input type="checkbox" id="multichannel"> Multichannel
+                  </label>
+                  <label>
+                    <input type="checkbox" id="mip_opt_out"> MIP Opt Out
                   </label>
                   <label>
                     <input type="checkbox" id="vad_events"> VAD Events
                   </label>
+                  <label>
+                    <input type="checkbox" id="diarize"> Diarize
+                  </label>
+                  <label>
+                    <input type="checkbox" id="filler_words"> Filler Words
+                  </label>
+                  <label>
+                    <input type="checkbox" id="paragraphs"> Paragraphs
+                  </label>
                 </div>
+              </div>
+              <div class="config-group dropdown-inputs">
+                <label>Redact:
+                  <select id="redact" multiple size="4">
+                    <option value="pci">PCI (Credit Card Info)</option>
+                    <option value="numbers">Numbers (3+ consecutive)</option>
+                    <option value="aggressive_numbers">Aggressive Numbers (All)</option>
+                    <option value="ssn">SSN (Social Security)</option>
+                  </select>
+                  <small>Hold Ctrl/Cmd to select multiple</small>
+                </label>
               </div>
               <div class="config-group">
                 <div class="extra-params-header" onclick="toggleExtraParams()">

@@ -190,7 +190,7 @@ let DEFAULT_CONFIG = {
     "base_url": "api.deepgram.com",
     "model": "nova-3",
     "language": "en",
-    "utterance_end_ms": "1000",
+    "utterance_end": "1000",
     "endpointing": "10",
     "smart_format": false,
     "interim_results": true,
@@ -198,12 +198,23 @@ let DEFAULT_CONFIG = {
     "dictation": false,
     "numerals": false,
     "profanity_filter": false,
-    "redact": false,
     "punctuate": false,
+    "multichannel": false,
+    "mip_opt_out": false,
     "encoding": "",
     "channels": 1,
     "sample_rate": 16000,
+    "callback": "",
+    "keywords": "",
+    "replace": "",
+    "search": "",
+    "tags": "",
+    "version": "",
+    "redact": [],
     "vad_events": true,
+    "diarize": false,
+    "filler_words": false,
+    "paragraphs": false,
     "extra": {}
 };
 
@@ -333,7 +344,8 @@ function setDefaultValues() {
     if (!DEFAULT_CONFIG) return;
     
     // Set text input defaults
-    ['baseUrl', 'model', 'language', 'utterance_end_ms', 'endpointing', 'encoding'].forEach(id => {
+    ['baseUrl', 'model', 'language', 'utterance_end', 'endpointing', 'encoding', 
+     'callback', 'keywords', 'replace', 'search', 'tags', 'version'].forEach(id => {
         const element = document.getElementById(id);
         if (element && DEFAULT_CONFIG[id]) {
             element.value = DEFAULT_CONFIG[id];
@@ -350,12 +362,21 @@ function setDefaultValues() {
 
     // Set checkbox defaults
     ['smart_format', 'interim_results', 'no_delay', 'dictation', 
-     'numerals', 'profanity_filter', 'redact', 'punctuate', 'vad_events'].forEach(id => {
+     'numerals', 'profanity_filter', 'punctuate', 'multichannel', 'mip_opt_out',
+     'vad_events', 'diarize', 'filler_words', 'paragraphs'].forEach(id => {
         const element = document.getElementById(id);
         if (element && DEFAULT_CONFIG[id] !== undefined) {
             element.checked = DEFAULT_CONFIG[id];
         }
     });
+    
+    // Set redact multi-select default
+    const redactElement = document.getElementById('redact');
+    if (redactElement && DEFAULT_CONFIG.redact) {
+        Array.from(redactElement.options).forEach(option => {
+            option.selected = DEFAULT_CONFIG.redact.includes(option.value);
+        });
+    }
 
     // Set extra params default
     document.getElementById('extraParams').value = JSON.stringify(DEFAULT_CONFIG.extra || {}, null, 2);
@@ -392,7 +413,8 @@ function importConfig(input) {
     isImported = true;
 
     // Clear all form fields first
-    ['baseUrl', 'model', 'language', 'utterance_end_ms', 'endpointing'].forEach(id => {
+    ['baseUrl', 'model', 'language', 'utterance_end', 'endpointing', 'encoding',
+     'callback', 'keywords', 'replace', 'search', 'tags', 'version'].forEach(id => {
         const element = document.getElementById(id);
         if (element) {
             element.value = '';
@@ -400,12 +422,21 @@ function importConfig(input) {
     });
 
     ['smart_format', 'interim_results', 'no_delay', 'dictation', 
-     'numerals', 'profanity_filter', 'redact'].forEach(id => {
+     'numerals', 'profanity_filter', 'punctuate', 'multichannel', 'mip_opt_out',
+     'vad_events', 'diarize', 'filler_words', 'paragraphs'].forEach(id => {
         const element = document.getElementById(id);
         if (element) {
             element.checked = false;
         }
     });
+    
+    // Clear redact multi-select
+    const redactElement = document.getElementById('redact');
+    if (redactElement) {
+        Array.from(redactElement.options).forEach(option => {
+            option.selected = false;
+        });
+    }
 
     // Only set values that are explicitly in the config
     Object.entries(config).forEach(([key, value]) => {
@@ -413,6 +444,12 @@ function importConfig(input) {
         if (element) {
             if (element.type === 'checkbox') {
                 element.checked = value === 'true' || value === true;
+            } else if (key === 'redact' && element.multiple) {
+                // Handle redact multi-select
+                const values = Array.isArray(value) ? value : [value];
+                Array.from(element.options).forEach(option => {
+                    option.selected = values.includes(option.value);
+                });
             } else {
                 element.value = value;
             }
@@ -853,7 +890,7 @@ function getConfig() {
     addIfSet('baseUrl');
     addIfSet('language');
     addIfSet('model');
-    addIfSet('utterance_end_ms');
+    addIfSet('utterance_end');
     addIfSet('endpointing');
     addIfSet('smart_format');
     addIfSet('interim_results');
@@ -861,12 +898,31 @@ function getConfig() {
     addIfSet('dictation');
     addIfSet('numerals');
     addIfSet('profanity_filter');
-    addIfSet('redact');
     addIfSet('punctuate');
+    addIfSet('multichannel');
+    addIfSet('mip_opt_out');
     addIfSet('encoding');
     addIfSet('channels');
     addIfSet('sample_rate');
+    addIfSet('callback');
+    addIfSet('keywords');
+    addIfSet('replace');
+    addIfSet('search');
+    addIfSet('tags');
+    addIfSet('version');
     addIfSet('vad_events');
+    addIfSet('diarize');
+    addIfSet('filler_words');
+    addIfSet('paragraphs');
+    
+    // Handle redact multi-select specially
+    const redactElement = document.getElementById('redact');
+    if (redactElement) {
+        const selectedValues = Array.from(redactElement.selectedOptions).map(option => option.value);
+        if (selectedValues.length > 0) {
+            config['redact'] = selectedValues;
+        }
+    }
 
     // Add extra parameters
     const extraParams = document.getElementById('extraParams');
@@ -906,8 +962,8 @@ function updateRequestUrl() {
     const model = document.getElementById('model').value;
     if (model) params.append('model', model);
     
-    const utteranceEndMs = document.getElementById('utterance_end_ms').value;
-    if (utteranceEndMs) params.append('utterance_end_ms', utteranceEndMs);
+    const utteranceEnd = document.getElementById('utterance_end').value;
+    if (utteranceEnd) params.append('utterance_end', utteranceEnd);
     
     const endpointing = document.getElementById('endpointing').value;
     if (endpointing) params.append('endpointing', endpointing);
@@ -920,6 +976,24 @@ function updateRequestUrl() {
     
     const sampleRate = document.getElementById('sample_rate').value;
     if (sampleRate) params.append('sample_rate', sampleRate);
+    
+    const callback = document.getElementById('callback').value;
+    if (callback) params.append('callback', callback);
+    
+    const keywords = document.getElementById('keywords').value;
+    if (keywords) params.append('keywords', keywords);
+    
+    const replace = document.getElementById('replace').value;
+    if (replace) params.append('replace', replace);
+    
+    const search = document.getElementById('search').value;
+    if (search) params.append('search', search);
+    
+    const tags = document.getElementById('tags').value;
+    if (tags) params.append('tags', tags);
+    
+    const version = document.getElementById('version').value;
+    if (version) params.append('version', version);
     
     const smartFormat = document.getElementById('smart_format').checked;
     if (smartFormat) params.append('smart_format', 'true');
@@ -945,8 +1019,32 @@ function updateRequestUrl() {
     const punctuate = document.getElementById('punctuate').checked;
     if (punctuate) params.append('punctuate', 'true');
     
+    const multichannel = document.getElementById('multichannel').checked;
+    if (multichannel) params.append('multichannel', 'true');
+    
+    const mipOptOut = document.getElementById('mip_opt_out').checked;
+    if (mipOptOut) params.append('mip_opt_out', 'true');
+    
     const vadEvents = document.getElementById('vad_events').checked;
     if (vadEvents) params.append('vad_events', 'true');
+    
+    // Handle redact multi-select
+    const redactElement = document.getElementById('redact');
+    if (redactElement) {
+        const selectedValues = Array.from(redactElement.selectedOptions).map(option => option.value);
+        selectedValues.forEach(value => {
+            if (value) params.append('redact', value);
+        });
+    }
+    
+    const diarize = document.getElementById('diarize').checked;
+    if (diarize) params.append('diarize', 'true');
+    
+    const fillerWords = document.getElementById('filler_words').checked;
+    if (fillerWords) params.append('filler_words', 'true');
+    
+    const paragraphs = document.getElementById('paragraphs').checked;
+    if (paragraphs) params.append('paragraphs', 'true');
     
     // Add extra parameters if any
     const extraParams = document.getElementById('extraParams');

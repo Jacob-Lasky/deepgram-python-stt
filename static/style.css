@@ -201,10 +201,9 @@ h1 {
 }
 
 .config-content {
-  max-height: 1000px;
-  overflow: hidden;
+  max-height: 100vh;
+  overflow: visible;
   transition: max-height 0.3s ease-out;
-  overflow-y: auto;
 }
 
 .config-content.collapsed {
@@ -226,6 +225,39 @@ h1 {
   margin: 8px 0;
   color: #fff;
   width: 100%;
+}
+
+.dropdown-inputs select {
+  width: 100%;
+  padding: 8px;
+  border: 1px solid #555;
+  border-radius: 4px;
+  background-color: #2a2a2a;
+  color: #fff;
+  font-size: 14px;
+}
+
+.dropdown-inputs select[multiple] {
+  height: auto;
+  min-height: 80px;
+}
+
+.dropdown-inputs select option {
+  padding: 4px 8px;
+  background-color: #2a2a2a;
+  color: #fff;
+}
+
+.dropdown-inputs select option:checked {
+  background-color: #47aca9;
+  color: #fff;
+}
+
+.dropdown-inputs small {
+  display: block;
+  color: #999;
+  font-size: 12px;
+  margin-top: 4px;
 }
 
 .extra-params-header {
