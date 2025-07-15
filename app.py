@@ -46,6 +46,13 @@ config = DeepgramClientOptions(url="wss://api.deepgram.com/v1/listen")
 # Store streaming responses for raw response display
 streaming_responses = {"microphone": [], "file_streaming": []}
 
+# Store current session info for raw response display
+current_session_info = {
+    "microphone": {"parameters": {}, "request_id": None},
+    "file_streaming": {"parameters": {}, "request_id": None},
+    "file_upload": {"parameters": {}, "request_id": None}
+}
+
 # Set up client configuration
 config.verbose = logging.INFO
 config.options = {"keepalive": "true"}
@@ -165,9 +172,34 @@ def upload_file():
                 f"Result keys: {list(result.keys()) if isinstance(result, dict) else 'Not a dict'}"
             )
 
+            # Store parameters for raw response display
+            current_session_info["file_upload"]["parameters"] = params.copy()
+            logger.info(f"Stored parameters for file upload: {current_session_info['file_upload']['parameters']}")
+            
+            # Extract request_id from result if available
+            request_id = None
+            logger.info(f"Result structure: {type(result)}")
+            if isinstance(result, dict):
+                logger.info(f"Result keys: {list(result.keys())}")
+                if "metadata" in result:
+                    logger.info(f"Metadata keys: {list(result['metadata'].keys())}")
+                    request_id = result["metadata"].get("request_id")
+                    logger.info(f"Extracted request_id from metadata: {request_id}")
+                else:
+                    logger.info("No metadata in result")
+            current_session_info["file_upload"]["request_id"] = request_id
+            logger.info(f"Stored request_id: {current_session_info['file_upload']['request_id']}")
+
             # Emit raw response data to frontend for debugging
             if result and not result.get("error"):
-                socketio.emit("raw_response", {"type": "file_upload", "data": result})
+                raw_response_data = {
+                    "type": "file_upload", 
+                    "data": result,
+                    "request_id": current_session_info["file_upload"]["request_id"],
+                    "parameters": current_session_info["file_upload"]["parameters"]
+                }
+                logger.info(f"About to emit raw response: request_id={raw_response_data['request_id']}, parameters_keys={list(raw_response_data['parameters'].keys()) if raw_response_data['parameters'] else 'None'}")
+                socketio.emit("raw_response", raw_response_data)
                 logger.info(f"Emitted raw response data for file upload")
 
             # Clean up
@@ -190,11 +222,14 @@ def upload_file():
 
 # Deepgram connection handling
 def initialize_deepgram_connection(config_options=None):
-    global dg_connection, deepgram, config
+    global dg_connection, deepgram, config, current_session_info
 
     if not config_options:
         logger.warning("No configuration options provided")
         return
+    
+    # Store parameters for raw response display
+    current_session_info["microphone"]["parameters"] = config_options.copy()
 
     # Update client config with base URL and create new client
     if "baseUrl" in config_options:
@@ -233,6 +268,9 @@ def initialize_deepgram_connection(config_options=None):
             if hasattr(result, "metadata") and result.metadata:
                 if hasattr(result.metadata, "request_id"):
                     request_id = result.metadata.request_id
+                    # Store request_id for raw response display
+                    if request_id and not current_session_info["microphone"]["request_id"]:
+                        current_session_info["microphone"]["request_id"] = request_id
 
             socketio.emit(
                 "transcription_update",
@@ -263,6 +301,8 @@ def initialize_deepgram_connection(config_options=None):
                             "streaming_responses": streaming_responses["microphone"],
                             "total_responses": len(streaming_responses["microphone"]),
                         },
+                        "request_id": current_session_info["microphone"]["request_id"],
+                        "parameters": current_session_info["microphone"]["parameters"],
                     },
                 )
                 logger.info(
@@ -314,6 +354,8 @@ def handle_toggle_transcription(data):
         logger.info("Starting Deepgram connection")
         # Clear accumulated responses for new session
         streaming_responses["microphone"] = []
+        # Clear session info for new session
+        current_session_info["microphone"] = {"parameters": {}, "request_id": None}
         config = data.get("config", {})
         initialize_deepgram_connection(config)
     elif action == "stop" and dg_connection:
@@ -349,6 +391,8 @@ def handle_start_file_streaming(data, callback=None):
 
         # Clear accumulated responses for new session
         streaming_responses["file_streaming"] = []
+        # Clear session info for new session
+        current_session_info["file_streaming"] = {"parameters": {}, "request_id": None}
 
         if not data or "file_path" not in data:
             error_msg = "No file_path provided"
@@ -359,6 +403,9 @@ def handle_start_file_streaming(data, callback=None):
 
         file_path = data["file_path"]
         config = data.get("config", {})
+        
+        # Store parameters for raw response display
+        current_session_info["file_streaming"]["parameters"] = config.copy()
 
         logger.info(f"File path: {file_path}")
         logger.info(f"Config: {config}")
@@ -484,15 +531,40 @@ def handle_file_upload(data, callback=None):
         logger.info(f"File size: {os.path.getsize(file_path)} bytes")
         logger.info(f"Parameters: {params}")
 
+        # Store parameters for raw response display
+        current_session_info["file_upload"]["parameters"] = params.copy()
+        logger.info(f"Stored parameters for file upload: {current_session_info['file_upload']['parameters']}")
+        
         result = process_audio(file_path, params, verbose=False)
         logger.info(f"Processing completed successfully")
         logger.info(
             f"Result keys: {list(result.keys()) if isinstance(result, dict) else 'Not a dict'}"
         )
 
+        # Extract request_id from result if available
+        request_id = None
+        logger.info(f"Result structure: {type(result)}")
+        if isinstance(result, dict):
+            logger.info(f"Result keys: {list(result.keys())}")
+            if "metadata" in result:
+                logger.info(f"Metadata keys: {list(result['metadata'].keys())}")
+                request_id = result["metadata"].get("request_id")
+                logger.info(f"Extracted request_id from metadata: {request_id}")
+            else:
+                logger.info("No metadata in result")
+        current_session_info["file_upload"]["request_id"] = request_id
+        logger.info(f"Stored request_id: {current_session_info['file_upload']['request_id']}")
+
         # Emit raw response data to frontend for debugging
         if result and not result.get("error"):
-            socketio.emit("raw_response", {"type": "file_upload", "data": result})
+            raw_response_data = {
+                "type": "file_upload", 
+                "data": result,
+                "request_id": current_session_info["file_upload"]["request_id"],
+                "parameters": current_session_info["file_upload"]["parameters"]
+            }
+            logger.info(f"About to emit raw response: request_id={raw_response_data['request_id']}, parameters_keys={list(raw_response_data['parameters'].keys()) if raw_response_data['parameters'] else 'None'}")
+            socketio.emit("raw_response", raw_response_data)
             logger.info(f"Emitted raw response data for file upload")
 
         # Clean up
@@ -701,6 +773,9 @@ def stream_audio_file_from_path(file_path, config):
             if hasattr(result, "metadata") and result.metadata:
                 if hasattr(result.metadata, "request_id"):
                     request_id = result.metadata.request_id
+                    # Store request_id for raw response display
+                    if request_id and not current_session_info["file_streaming"]["request_id"]:
+                        current_session_info["file_streaming"]["request_id"] = request_id
 
             if result.is_final:
                 # Emit final transcript to client
@@ -756,6 +831,8 @@ def stream_audio_file_from_path(file_path, config):
                                     streaming_responses["file_streaming"]
                                 ),
                             },
+                            "request_id": current_session_info["file_streaming"]["request_id"],
+                            "parameters": current_session_info["file_streaming"]["parameters"],
                         },
                     )
                     logger.info(

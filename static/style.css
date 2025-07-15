@@ -977,10 +977,19 @@ h1 {
 }
 
 .raw-response-content {
-  max-height: 400px;
+  max-height: 370px;
   overflow-y: auto;
   overflow-x: hidden;
-  transition: max-height 0.3s ease-out;
+  transition: max-height 0.3s ease;
+  padding: 0 12px;
+}
+
+.raw-response-section {
+  margin-bottom: 16px;
+}
+
+.raw-response-section:last-child {
+  margin-bottom: 0;
 }
 
 .raw-response-content.collapsed {

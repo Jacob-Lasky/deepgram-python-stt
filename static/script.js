@@ -734,6 +734,9 @@ function groupWordsBySpeaker(words) {
 
 socket.on("raw_response", (data) => {
   console.log('Received raw response:', data);
+  console.log('Request ID:', data.request_id);
+  console.log('Parameters:', data.parameters);
+  console.log('Parameters keys:', data.parameters ? Object.keys(data.parameters) : 'No parameters');
   
   // Display the raw response in the interim results container
   const interimCaptions = document.getElementById("captions");
@@ -745,14 +748,67 @@ socket.on("raw_response", (data) => {
   // Create header with toggle functionality
   const headerDiv = document.createElement("div");
   headerDiv.className = "raw-response-header";
+  
+  // Build header text with request_id if available
+  let headerText = `🔍 Raw Response (${data.type})`;
+  if (data.request_id) {
+    headerText += ` - Request ID: ${data.request_id}`;
+  }
+  
   headerDiv.innerHTML = `
-    <span class="raw-response-title">🔍 Raw Response (${data.type})</span>
+    <span class="raw-response-title">${headerText}</span>
     <span class="raw-response-toggle">▼</span>
   `;
   
   // Create content area (initially collapsed)
   const contentDiv = document.createElement("div");
   contentDiv.className = "raw-response-content collapsed";
+  
+  // Add parameters section if available
+  console.log('Checking parameters section:', {
+    hasParameters: !!data.parameters,
+    parametersType: typeof data.parameters,
+    parametersKeys: data.parameters ? Object.keys(data.parameters) : 'N/A',
+    parametersLength: data.parameters ? Object.keys(data.parameters).length : 0
+  });
+  
+  if (data.parameters && Object.keys(data.parameters).length > 0) {
+    console.log('Creating parameters section...');
+    const parametersDiv = document.createElement("div");
+    parametersDiv.className = "raw-response-section";
+    
+    const parametersHeader = document.createElement("h4");
+    parametersHeader.textContent = "Parameters Used:";
+    parametersHeader.style.color = "#47aca9";
+    parametersHeader.style.marginBottom = "8px";
+    
+    const parametersContainer = document.createElement("div");
+    parametersContainer.className = "json-tree-container";
+    
+    try {
+      const parametersTree = createJsonTree(data.parameters);
+      parametersContainer.appendChild(parametersTree);
+    } catch (e) {
+      const preElement = document.createElement("pre");
+      preElement.className = "raw-response-data";
+      preElement.textContent = JSON.stringify(data.parameters, null, 2);
+      parametersContainer.appendChild(preElement);
+    }
+    
+    parametersDiv.appendChild(parametersHeader);
+    parametersDiv.appendChild(parametersContainer);
+    contentDiv.appendChild(parametersDiv);
+  }
+  
+  // Add response data section
+  const responseDiv = document.createElement("div");
+  responseDiv.className = "raw-response-section";
+  
+  const responseHeader = document.createElement("h4");
+  responseHeader.textContent = "Response Data:";
+  responseHeader.style.color = "#47aca9";
+  responseHeader.style.marginBottom = "8px";
+  responseHeader.style.marginTop = "16px";
   
   // Create collapsible JSON tree
   const jsonContainer = document.createElement("div");
@@ -769,7 +825,9 @@ socket.on("raw_response", (data) => {
     jsonContainer.appendChild(preElement);
   }
   
-  contentDiv.appendChild(jsonContainer);
+  responseDiv.appendChild(responseHeader);
+  responseDiv.appendChild(jsonContainer);
+  contentDiv.appendChild(responseDiv);
   
   // Add toggle functionality
   headerDiv.addEventListener('click', () => {
