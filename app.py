@@ -39,14 +39,21 @@ API_KEY = os.getenv("DEEPGRAM_API_KEY")
 with open("config/defaults.json", "r") as f:
     DEFAULT_CONFIG = json.load(f)
 
-# Set up client configuration
-config = DeepgramClientOptions(
-    verbose=logging.INFO,
-    options={"keepalive": "true"},
-)
-
-deepgram = None
+# Global variables
 dg_connection = None
+deepgram = None
+config = DeepgramClientOptions(url="wss://api.deepgram.com/v1/listen")
+
+# Store streaming responses for raw response display
+streaming_responses = {
+    'microphone': [],
+    'file_streaming': []
+}
+
+# Set up client configuration
+config.verbose = logging.INFO
+config.options = {"keepalive": "true"}
+
 streaming_thread = None
 stop_streaming = False
 
@@ -154,6 +161,14 @@ def upload_file():
             logger.info(f"Processing completed successfully")
             logger.info(f"Result keys: {list(result.keys()) if isinstance(result, dict) else 'Not a dict'}")
 
+            # Emit raw response data to frontend for debugging
+            if result and not result.get('error'):
+                socketio.emit('raw_response', {
+                    'type': 'file_upload',
+                    'data': result
+                })
+                logger.info(f"Emitted raw response data for file upload")
+
             # Clean up
             os.remove(file_path)
             logger.info(f"Temporary file removed: {file_path}")
@@ -195,6 +210,18 @@ def initialize_deepgram_connection(config_options=None):
         logger.info(f"\n\n{open}\n\n")
 
     def on_message(self, result, **kwargs):
+        # Store the full result for raw response display
+        try:
+            if hasattr(result, 'to_dict'):
+                result_dict = result.to_dict()
+            elif hasattr(result, '__dict__'):
+                result_dict = result.__dict__
+            else:
+                result_dict = str(result)
+            streaming_responses['microphone'].append(result_dict)
+        except Exception as e:
+            logger.error(f"Error storing streaming response: {e}")
+        
         transcript = result.channel.alternatives[0].transcript
         if len(transcript) > 0:
             timing = {"start": result.start, "end": result.start + result.duration}
@@ -221,6 +248,28 @@ def initialize_deepgram_connection(config_options=None):
 
     def on_close(self, close, **kwargs):
         logger.info(f"\n\n{close}\n\n")
+        
+        # Emit accumulated streaming responses for debugging
+        if streaming_responses['microphone']:
+            try:
+                socketio.emit('raw_response', {
+                    'type': 'microphone_recording',
+                    'data': {
+                        'close_event': str(close),
+                        'streaming_responses': streaming_responses['microphone'],
+                        'total_responses': len(streaming_responses['microphone'])
+                    }
+                })
+                logger.info(f"Emitted {len(streaming_responses['microphone'])} accumulated streaming responses")
+                
+                # Clear the accumulated responses
+                streaming_responses['microphone'] = []
+            except Exception as e:
+                logger.error(f"Error processing raw response: {e}")
+                socketio.emit('raw_response', {
+                    'type': 'microphone_recording',
+                    'data': {'error': str(e), 'raw': str(close)}
+                })
 
     def on_error(self, error, **kwargs):
         logger.info(f"\n\n{error}\n\n")
@@ -251,6 +300,8 @@ def handle_toggle_transcription(data):
     action = data.get("action")
     if action == "start":
         logger.info("Starting Deepgram connection")
+        # Clear accumulated responses for new session
+        streaming_responses['microphone'] = []
         config = data.get("config", {})
         initialize_deepgram_connection(config)
     elif action == "stop" and dg_connection:
@@ -279,6 +330,9 @@ def handle_start_file_streaming(data, callback=None):
     try:
         logger.info("=== START FILE STREAMING EVENT RECEIVED ===")
         logger.info(f"Data received: {data}")
+        
+        # Clear accumulated responses for new session
+        streaming_responses['file_streaming'] = []
         
         if not data or 'file_path' not in data:
             error_msg = "No file_path provided"
@@ -412,6 +466,14 @@ def handle_file_upload(data, callback=None):
         result = process_audio(file_path, params, verbose=True)
         logger.info(f"Processing completed successfully")
         logger.info(f"Result keys: {list(result.keys()) if isinstance(result, dict) else 'Not a dict'}")
+
+        # Emit raw response data to frontend for debugging
+        if result and not result.get('error'):
+            socketio.emit('raw_response', {
+                'type': 'file_upload',
+                'data': result
+            })
+            logger.info(f"Emitted raw response data for file upload")
 
         # Clean up
         os.remove(file_path)
@@ -588,6 +650,18 @@ def stream_audio_file_from_path(file_path, config):
         
         # Set up event handlers
         def on_message(self, result, **kwargs):
+            # Store the full result for raw response display
+            try:
+                if hasattr(result, 'to_dict'):
+                    result_dict = result.to_dict()
+                elif hasattr(result, '__dict__'):
+                    result_dict = result.__dict__
+                else:
+                    result_dict = str(result)
+                streaming_responses['file_streaming'].append(result_dict)
+            except Exception as e:
+                logger.error(f"Error storing file streaming response: {e}")
+            
             transcript = result.channel.alternatives[0].transcript
             if not transcript:  # Skip empty transcripts
                 return
@@ -625,6 +699,28 @@ def stream_audio_file_from_path(file_path, config):
         
         def on_close(self, close, **kwargs):
             logger.info(f"Deepgram connection closed: {close}")
+            
+            # Emit accumulated streaming responses for debugging
+            if streaming_responses['file_streaming']:
+                try:
+                    socketio.emit('raw_response', {
+                        'type': 'file_streaming',
+                        'data': {
+                            'close_event': str(close),
+                            'streaming_responses': streaming_responses['file_streaming'],
+                            'total_responses': len(streaming_responses['file_streaming'])
+                        }
+                    })
+                    logger.info(f"[FILE STREAMING] Emitted {len(streaming_responses['file_streaming'])} accumulated streaming responses")
+                    
+                    # Clear the accumulated responses
+                    streaming_responses['file_streaming'] = []
+                except Exception as e:
+                    logger.error(f"[FILE STREAMING] Error processing raw response: {e}")
+                    socketio.emit('raw_response', {
+                        'type': 'file_streaming',
+                        'data': {'error': str(e), 'raw': str(close)}
+                    })
         
         def on_open(self, open, **kwargs):
             logger.info(f"Deepgram connection opened: {open}")

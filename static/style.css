@@ -907,3 +907,67 @@ h1 {
   text-align: center;
   padding: 10px;
 }
+
+/* Raw Response Display */
+.raw-response-container {
+  margin: 10px 0;
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  border-radius: 6px;
+  background: rgba(255, 255, 255, 0.05);
+  overflow: hidden;
+}
+
+.raw-response-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 10px 15px;
+  background: rgba(255, 255, 255, 0.1);
+  cursor: pointer;
+  user-select: none;
+  transition: background-color 0.2s;
+}
+
+.raw-response-header:hover {
+  background: rgba(255, 255, 255, 0.15);
+}
+
+.raw-response-title {
+  font-weight: 600;
+  color: #47aca9;
+  font-size: 14px;
+}
+
+.raw-response-toggle {
+  color: #47aca9;
+  font-size: 12px;
+  transition: transform 0.2s;
+}
+
+.raw-response-content {
+  max-height: 400px;
+  overflow-y: auto;
+  overflow-x: hidden;
+  transition: max-height 0.3s ease-out;
+}
+
+.raw-response-content.collapsed {
+  max-height: 0;
+  overflow: hidden;
+}
+
+.raw-response-data {
+  margin: 0;
+  padding: 15px;
+  background: rgba(0, 0, 0, 0.3);
+  color: #e0e0e0;
+  font-family: 'Courier New', monospace;
+  font-size: 12px;
+  line-height: 1.4;
+  white-space: pre-wrap;
+  word-wrap: break-word;
+  overflow-x: auto;
+  border: none;
+  max-height: 370px;
+  overflow-y: auto;
+}

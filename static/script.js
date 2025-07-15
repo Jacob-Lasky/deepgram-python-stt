@@ -504,6 +504,59 @@ socket.on("request_id_update", (data) => {
   }
 });
 
+// Listen for raw response data
+socket.on("raw_response", (data) => {
+  console.log('Received raw response:', data);
+  
+  // Display the raw response in the interim results container
+  const interimCaptions = document.getElementById("captions");
+  
+  // Create a collapsible raw response section
+  const rawResponseDiv = document.createElement("div");
+  rawResponseDiv.className = "raw-response-container";
+  
+  // Create header with toggle functionality
+  const headerDiv = document.createElement("div");
+  headerDiv.className = "raw-response-header";
+  headerDiv.innerHTML = `
+    <span class="raw-response-title">🔍 Raw Response (${data.type})</span>
+    <span class="raw-response-toggle">▼</span>
+  `;
+  
+  // Create content area (initially collapsed)
+  const contentDiv = document.createElement("div");
+  contentDiv.className = "raw-response-content collapsed";
+  
+  // Format the raw data as JSON
+  const preElement = document.createElement("pre");
+  preElement.className = "raw-response-data";
+  try {
+    preElement.textContent = JSON.stringify(data.data, null, 2);
+  } catch (e) {
+    preElement.textContent = String(data.data);
+  }
+  
+  contentDiv.appendChild(preElement);
+  
+  // Add toggle functionality
+  headerDiv.addEventListener('click', () => {
+    const isCollapsed = contentDiv.classList.contains('collapsed');
+    if (isCollapsed) {
+      contentDiv.classList.remove('collapsed');
+      headerDiv.querySelector('.raw-response-toggle').textContent = '▲';
+    } else {
+      contentDiv.classList.add('collapsed');
+      headerDiv.querySelector('.raw-response-toggle').textContent = '▼';
+    }
+  });
+  
+  rawResponseDiv.appendChild(headerDiv);
+  rawResponseDiv.appendChild(contentDiv);
+  
+  interimCaptions.appendChild(rawResponseDiv);
+  rawResponseDiv.scrollIntoView({ behavior: "smooth" });
+});
+
 async function getMicrophone() {
   try {
     // Get the selected device ID from the dropdown if it exists
