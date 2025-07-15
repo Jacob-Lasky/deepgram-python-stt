@@ -198,14 +198,26 @@ def initialize_deepgram_connection(config_options=None):
         transcript = result.channel.alternatives[0].transcript
         if len(transcript) > 0:
             timing = {"start": result.start, "end": result.start + result.duration}
+            
+            # Extract request_id from metadata if available
+            request_id = None
+            if hasattr(result, 'metadata') and result.metadata:
+                if hasattr(result.metadata, 'request_id'):
+                    request_id = result.metadata.request_id
+            
             socketio.emit(
                 "transcription_update",
                 {
                     "transcription": transcript,
                     "is_final": result.is_final,
                     "timing": timing,
+                    "request_id": request_id,
                 },
             )
+            
+            # Emit request_id separately when available (for first message)
+            if request_id:
+                socketio.emit("request_id_update", {"request_id": request_id})
 
     def on_close(self, close, **kwargs):
         logger.info(f"\n\n{close}\n\n")
@@ -580,20 +592,32 @@ def stream_audio_file_from_path(file_path, config):
             if not transcript:  # Skip empty transcripts
                 return
             
+            # Extract request_id from metadata if available
+            request_id = None
+            if hasattr(result, 'metadata') and result.metadata:
+                if hasattr(result.metadata, 'request_id'):
+                    request_id = result.metadata.request_id
+            
             if result.is_final:
                 # Emit final transcript to client
                 socketio.emit('transcript', {
                     'transcript': transcript,
                     'is_final': True,
-                    'channel': result.channel_index[0] if result.channel_index else 0
+                    'channel': result.channel_index[0] if result.channel_index else 0,
+                    'request_id': request_id
                 })
             else:
                 # Emit interim transcript to client
                 socketio.emit('transcript', {
                     'transcript': transcript,
                     'is_final': False,
-                    'channel': result.channel_index[0] if result.channel_index else 0
+                    'channel': result.channel_index[0] if result.channel_index else 0,
+                    'request_id': request_id
                 })
+            
+            # Emit request_id separately when available (for first message)
+            if request_id:
+                socketio.emit("request_id_update", {"request_id": request_id})
         
         def on_error(self, error, **kwargs):
             logger.error(f"Deepgram error: {error}")

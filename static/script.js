@@ -16,6 +16,9 @@ let estimatedDuration = 0;
 let audioPlayer = null;
 let isAudioMuted = false;
 
+// Track if request ID has been shown for this session
+let requestIdShown = false;
+
 // Function to stop file streaming
 function stopFileStreaming() {
     if (isStreamingFile) {
@@ -482,6 +485,25 @@ socket.on("transcription_update", (data) => {
   }
 });
 
+// Listen for request ID updates
+socket.on("request_id_update", (data) => {
+  console.log('Received request ID:', data.request_id);
+  
+  // Only show the request ID once per session
+  if (data.request_id && !requestIdShown) {
+    // Display the request ID in the interim results container
+    const interimCaptions = document.getElementById("captions");
+    const requestIdDiv = document.createElement("div");
+    requestIdDiv.className = "url-info";
+    requestIdDiv.textContent = `Request ID: ${data.request_id}`;
+    interimCaptions.appendChild(requestIdDiv);
+    requestIdDiv.scrollIntoView({ behavior: "smooth" });
+    
+    // Mark that we've shown the request ID for this session
+    requestIdShown = true;
+  }
+});
+
 async function getMicrophone() {
   try {
     // Get the selected device ID from the dropdown if it exists
@@ -520,6 +542,8 @@ async function openMicrophone(microphone, socket) {
 
 async function startRecording() {
   isRecording = true;
+  // Reset request ID flag for new session
+  requestIdShown = false;
   microphone = await getMicrophone();
   console.log("Client: Waiting to open microphone");
   
@@ -1184,6 +1208,9 @@ document.addEventListener("DOMContentLoaded", () => {
     // Function to stream a prerecorded file
     function streamPrerecordedFile(file) {
         console.log(`Starting file streaming for: ${file.name}`);
+        
+        // Reset request ID flag for new session
+        requestIdShown = false;
         
         // Get current configuration
         const config = getConfig();
