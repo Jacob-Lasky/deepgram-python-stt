@@ -505,6 +505,196 @@ socket.on("request_id_update", (data) => {
 });
 
 // Listen for raw response data
+// Create collapsible JSON tree
+function createJsonTree(data, key = null, level = 0) {
+  const container = document.createElement('div');
+  container.className = 'json-node';
+  
+  if (data === null) {
+    container.innerHTML = `${key ? `<span class="json-key">${key}:</span> ` : ''}<span class="json-null">null</span>`;
+    return container;
+  }
+  
+  if (typeof data === 'string') {
+    container.innerHTML = `${key ? `<span class="json-key">${key}:</span> ` : ''}<span class="json-string">"${escapeHtml(data)}"</span>`;
+    return container;
+  }
+  
+  if (typeof data === 'number') {
+    container.innerHTML = `${key ? `<span class="json-key">${key}:</span> ` : ''}<span class="json-number">${data}</span>`;
+    return container;
+  }
+  
+  if (typeof data === 'boolean') {
+    container.innerHTML = `${key ? `<span class="json-key">${key}:</span> ` : ''}<span class="json-boolean">${data}</span>`;
+    return container;
+  }
+  
+  if (Array.isArray(data)) {
+    const header = document.createElement('div');
+    header.className = 'json-header';
+    header.innerHTML = `
+      <span class="json-toggle">▶</span>
+      ${key ? `<span class="json-key">${key}:</span>` : ''}
+      <span class="json-bracket">[</span>
+      <span class="json-count">${data.length} items</span>
+      <span class="json-bracket">]</span>
+    `;
+    
+    const content = document.createElement('div');
+    content.className = 'json-content collapsed';
+    content.style.marginLeft = '20px';
+    
+    data.forEach((item, index) => {
+      const itemNode = createJsonTree(item, index, level + 1);
+      content.appendChild(itemNode);
+    });
+    
+    header.addEventListener('click', () => {
+      const toggle = header.querySelector('.json-toggle');
+      const isCollapsed = content.classList.contains('collapsed');
+      
+      if (isCollapsed) {
+        content.classList.remove('collapsed');
+        toggle.textContent = '▼';
+      } else {
+        content.classList.add('collapsed');
+        toggle.textContent = '▶';
+      }
+    });
+    
+    container.appendChild(header);
+    container.appendChild(content);
+    return container;
+  }
+  
+  if (typeof data === 'object') {
+    const keys = Object.keys(data);
+    const header = document.createElement('div');
+    header.className = 'json-header';
+    header.innerHTML = `
+      <span class="json-toggle">▶</span>
+      ${key ? `<span class="json-key">${key}:</span>` : ''}
+      <span class="json-bracket">{</span>
+      <span class="json-count">${keys.length} keys</span>
+      <span class="json-bracket">}</span>
+    `;
+    
+    const content = document.createElement('div');
+    content.className = 'json-content collapsed';
+    content.style.marginLeft = '20px';
+    
+    keys.forEach(objKey => {
+      const itemNode = createJsonTree(data[objKey], objKey, level + 1);
+      content.appendChild(itemNode);
+    });
+    
+    header.addEventListener('click', () => {
+      const toggle = header.querySelector('.json-toggle');
+      const isCollapsed = content.classList.contains('collapsed');
+      
+      if (isCollapsed) {
+        content.classList.remove('collapsed');
+        toggle.textContent = '▼';
+      } else {
+        content.classList.add('collapsed');
+        toggle.textContent = '▶';
+      }
+    });
+    
+    container.appendChild(header);
+    container.appendChild(content);
+    return container;
+  }
+  
+  // Fallback for unknown types
+  container.innerHTML = `${key ? `<span class="json-key">${key}:</span> ` : ''}<span class="json-unknown">${String(data)}</span>`;
+  return container;
+}
+
+// Helper function to escape HTML
+function escapeHtml(text) {
+  const div = document.createElement('div');
+  div.textContent = text;
+  return div.innerHTML;
+}
+
+// Format transcript with speaker labels for diarization
+function formatTranscriptWithSpeakers(data) {
+  // Check if this is a multichannel response
+  if (data.results && data.results.channels && data.results.channels.length > 1) {
+    // Handle multichannel audio
+    let formattedTranscript = '';
+    data.results.channels.forEach((channel, channelIndex) => {
+      if (channel.alternatives && channel.alternatives[0]) {
+        const alt = channel.alternatives[0];
+        formattedTranscript += `\n[Channel ${channelIndex + 1}]\n`;
+        
+        if (alt.words && alt.words.length > 0) {
+          // Group words by speaker within this channel
+          const speakerGroups = groupWordsBySpeaker(alt.words);
+          speakerGroups.forEach(group => {
+            formattedTranscript += `Speaker ${group.speaker}: ${group.text}\n`;
+          });
+        } else {
+          formattedTranscript += alt.transcript + '\n';
+        }
+      }
+    });
+    return formattedTranscript.trim();
+  }
+  
+  // Handle single channel with diarization
+  if (data.results && data.results.channels && data.results.channels[0]) {
+    const channel = data.results.channels[0];
+    if (channel.alternatives && channel.alternatives[0]) {
+      const alt = channel.alternatives[0];
+      
+      // Check if words have speaker information
+      if (alt.words && alt.words.length > 0 && alt.words[0].hasOwnProperty('speaker')) {
+        const speakerGroups = groupWordsBySpeaker(alt.words);
+        let formattedTranscript = '';
+        speakerGroups.forEach(group => {
+          formattedTranscript += `Speaker ${group.speaker}: ${group.text}\n`;
+        });
+        return formattedTranscript.trim();
+      } else {
+        // No speaker information, return plain transcript
+        return alt.transcript;
+      }
+    }
+  }
+  
+  // Fallback to plain transcript
+  return data.results?.channels[0]?.alternatives[0]?.transcript || '';
+}
+
+// Group words by speaker for diarization
+function groupWordsBySpeaker(words) {
+  const groups = [];
+  let currentGroup = null;
+  
+  words.forEach(word => {
+    const speaker = word.speaker !== undefined ? word.speaker : 0;
+    
+    if (!currentGroup || currentGroup.speaker !== speaker) {
+      // Start new speaker group
+      currentGroup = {
+        speaker: speaker,
+        words: [word],
+        text: word.punctuated_word || word.word
+      };
+      groups.push(currentGroup);
+    } else {
+      // Add to current speaker group
+      currentGroup.words.push(word);
+      currentGroup.text += ' ' + (word.punctuated_word || word.word);
+    }
+  });
+  
+  return groups;
+}
+
 socket.on("raw_response", (data) => {
   console.log('Received raw response:', data);
   
@@ -527,16 +717,22 @@ socket.on("raw_response", (data) => {
   const contentDiv = document.createElement("div");
   contentDiv.className = "raw-response-content collapsed";
   
-  // Format the raw data as JSON
-  const preElement = document.createElement("pre");
-  preElement.className = "raw-response-data";
+  // Create collapsible JSON tree
+  const jsonContainer = document.createElement("div");
+  jsonContainer.className = "json-tree-container";
+  
   try {
-    preElement.textContent = JSON.stringify(data.data, null, 2);
+    const jsonTree = createJsonTree(data.data);
+    jsonContainer.appendChild(jsonTree);
   } catch (e) {
+    // Fallback to plain text if JSON parsing fails
+    const preElement = document.createElement("pre");
+    preElement.className = "raw-response-data";
     preElement.textContent = String(data.data);
+    jsonContainer.appendChild(preElement);
   }
   
-  contentDiv.appendChild(preElement);
+  contentDiv.appendChild(jsonContainer);
   
   // Add toggle functionality
   headerDiv.addEventListener('click', () => {
@@ -1228,12 +1424,22 @@ document.addEventListener("DOMContentLoaded", () => {
               return;
             }
             
-            // Display transcription
-            const transcript = result.results?.channels[0]?.alternatives[0]?.transcript;
-            if (transcript) {
+            // Display transcription with speaker formatting
+            const formattedTranscript = formatTranscriptWithSpeakers(result);
+            if (formattedTranscript) {
               const finalCaptions = document.getElementById('finalCaptions');
-              const finalDiv = document.createElement('span');
-              finalDiv.textContent = transcript + ' ';
+              const finalDiv = document.createElement('div');
+              
+              // Check if transcript has speaker labels (contains "Speaker ")
+              if (formattedTranscript.includes('Speaker ') || formattedTranscript.includes('[Channel ')) {
+                // Use pre-formatted text to preserve line breaks
+                finalDiv.style.whiteSpace = 'pre-line';
+                finalDiv.textContent = formattedTranscript;
+              } else {
+                // Plain transcript, use span for inline display
+                finalDiv.textContent = formattedTranscript + ' ';
+              }
+              
               finalDiv.className = 'final';
               finalCaptions.appendChild(finalDiv);
               finalDiv.scrollIntoView({ behavior: 'smooth' });

@@ -971,3 +971,115 @@ h1 {
   max-height: 370px;
   overflow-y: auto;
 }
+
+/* JSON Tree Styles */
+.json-tree-container {
+  padding: 15px;
+  background: rgba(0, 0, 0, 0.3);
+  font-family: 'Courier New', monospace;
+  font-size: 12px;
+  line-height: 1.4;
+  max-height: 370px;
+  overflow-y: auto;
+}
+
+.json-node {
+  margin: 2px 0;
+}
+
+.json-header {
+  cursor: pointer;
+  padding: 2px 4px;
+  border-radius: 3px;
+  transition: background-color 0.2s;
+  user-select: none;
+}
+
+.json-header:hover {
+  background: rgba(255, 255, 255, 0.1);
+}
+
+.json-toggle {
+  display: inline-block;
+  width: 12px;
+  color: #47aca9;
+  font-size: 10px;
+  margin-right: 4px;
+}
+
+.json-key {
+  color: #9ca3af;
+  font-weight: 600;
+}
+
+.json-string {
+  color: #10b981;
+}
+
+.json-number {
+  color: #f59e0b;
+}
+
+.json-boolean {
+  color: #8b5cf6;
+}
+
+.json-null {
+  color: #ef4444;
+  font-style: italic;
+}
+
+.json-bracket {
+  color: #6b7280;
+  margin: 0 2px;
+}
+
+.json-count {
+  color: #6b7280;
+  font-size: 11px;
+  font-style: italic;
+  margin: 0 4px;
+}
+
+.json-content {
+  overflow: hidden;
+  transition: max-height 0.2s ease-out;
+  max-height: 1000px;
+}
+
+.json-content.collapsed {
+  max-height: 0;
+}
+
+.json-unknown {
+  color: #ef4444;
+}
+
+/* Speaker Label Styles */
+.final {
+  line-height: 1.6;
+}
+
+.final[style*="pre-line"] {
+  margin: 10px 0;
+  padding: 10px;
+  background: rgba(255, 255, 255, 0.05);
+  border-radius: 6px;
+  border-left: 3px solid #47aca9;
+}
+
+/* Style for speaker labels within transcript */
+.final[style*="pre-line"]:not(:empty)::before {
+  content: "🎙️ Transcript with Speaker Labels";
+  display: block;
+  font-size: 12px;
+  color: #47aca9;
+  margin-bottom: 8px;
+  font-weight: 600;
+}
+
+/* Style for channel labels */
+.final[style*="pre-line"] {
+  font-family: 'Courier New', monospace;
+  font-size: 13px;
+}

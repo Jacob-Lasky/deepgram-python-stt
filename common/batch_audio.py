@@ -60,7 +60,7 @@ def process_audio(
         json_data = None
         # Detect content type from file extension
         content_type, _ = mimetypes.guess_type(audio_path)
-        if not content_type or not content_type.startswith('audio/'):
+        if not content_type or not content_type.startswith("audio/"):
             # Default to audio/wav if we can't detect or it's not audio
             content_type = "audio/wav"
         print(f"Detected content type: {content_type}")
@@ -84,7 +84,7 @@ def process_audio(
             json=json_data,
             headers=headers,
             timeout=600,
-            verify=True  # Ensure SSL verification
+            verify=True,  # Ensure SSL verification
         )
         print(f"Response status code: {response.status_code}")
         print(f"Response headers: {dict(response.headers)}")
@@ -101,7 +101,7 @@ def process_audio(
             # Still try to return the response for debugging
             return {
                 "error": f"HTTP {response.status_code}: {response.text}",
-                "status_code": response.status_code
+                "status_code": response.status_code,
             }
 
         response_json = response.json()
