@@ -190,7 +190,7 @@ let DEFAULT_CONFIG = {
     "base_url": "api.deepgram.com",
     "model": "nova-3",
     "language": "en",
-    "utterance_end": "1000",
+    "utterance_end_ms": "1000",
     "endpointing": "10",
     "smart_format": false,
     "interim_results": true,
@@ -292,7 +292,22 @@ socket.on('transcript', (data) => {
     
     // Create interim message div with formatting similar to microphone streaming
     const interimDiv = document.createElement("div");
-    const type = data.is_final ? "[Is Final]" : "[Interim Result]";
+    
+    // Build type indicator based on multiple flags
+    const indicators = [];
+    if (data.is_final) {
+        indicators.push("Is Final");
+    }
+    if (data.speech_final) {
+        indicators.push("Speech Final");
+    }
+    
+    // If no special indicators, it's an interim result
+    if (indicators.length === 0) {
+        indicators.push("Interim Result");
+    }
+    
+    const type = `[${indicators.join(", ")}]`;
     interimDiv.textContent = `${type} ${data.transcript}`;
     interimDiv.className = data.is_final ? "final" : "interim";
     
@@ -312,9 +327,16 @@ socket.on('transcript', (data) => {
         finalDiv.textContent = data.transcript + " ";
         finalDiv.className = "final";
         finalCaptions.appendChild(finalDiv);
+        
+        // Add line break if speech_final is true
+        if (data.speech_final) {
+            const lineBreak = document.createElement("br");
+            finalCaptions.appendChild(lineBreak);
+        }
+        
         finalDiv.scrollIntoView({ behavior: "smooth" });
-    } else {
-        // For interim results, update or create the interim span
+    } else if (!data.speech_final) {
+        // For interim results, update or create the interim span (but not if speech_final)
         let interimSpan = finalCaptions.querySelector('.interim-final');
         if (!interimSpan) {
             interimSpan = document.createElement("span");
@@ -344,7 +366,7 @@ function setDefaultValues() {
     if (!DEFAULT_CONFIG) return;
     
     // Set text input defaults
-    ['baseUrl', 'model', 'language', 'utterance_end', 'endpointing', 'encoding', 
+    ['baseUrl', 'model', 'language', 'utterance_end_ms', 'endpointing', 'encoding', 
      'callback', 'keywords', 'replace', 'search', 'tags', 'version'].forEach(id => {
         const element = document.getElementById(id);
         if (element && DEFAULT_CONFIG[id]) {
@@ -413,7 +435,7 @@ function importConfig(input) {
     isImported = true;
 
     // Clear all form fields first
-    ['baseUrl', 'model', 'language', 'utterance_end', 'endpointing', 'encoding',
+    ['baseUrl', 'model', 'language', 'utterance_end_ms', 'endpointing', 'encoding',
      'callback', 'keywords', 'replace', 'search', 'tags', 'version'].forEach(id => {
         const element = document.getElementById(id);
         if (element) {
@@ -486,10 +508,32 @@ socket.on("transcription_update", (data) => {
   
   // Create interim message div
   const interimDiv = document.createElement("div");
-  const type = data.is_final ? "[Is Final]" : data.utterance_end ? "[Utterance End]" : "[Interim Result]";
-  interimDiv.textContent = data.utterance_end ? 
-    `${type} ${data.transcription}` :
-    `${timeString}   ${type} ${data.transcription}`;
+  let type;
+  let showTimestamp = true;
+  
+  // Build type indicator based on multiple flags
+  const indicators = [];
+  if (data.is_final) {
+    indicators.push("Is Final");
+  }
+  if (data.speech_final) {
+    indicators.push("Speech Final");
+  }
+  if (data.utterance_end_ms) {
+    indicators.push("Utterance End");
+    showTimestamp = false; // Don't show timestamp for utterance end
+  }
+  
+  // If no special indicators, it's an interim result
+  if (indicators.length === 0) {
+    indicators.push("Interim Result");
+  }
+  
+  type = `[${indicators.join(", ")}]`;
+  
+  interimDiv.textContent = showTimestamp ? 
+    `${timeString}   ${type} ${data.transcription}` :
+    `${type} ${data.transcription}`;
   interimDiv.className = data.is_final ? "final" : "interim";
   
   // Add to interim container
@@ -508,8 +552,15 @@ socket.on("transcription_update", (data) => {
     finalDiv.textContent = data.transcription + " ";
     finalDiv.className = "final";
     finalCaptions.appendChild(finalDiv);
+    
+    // Add line break if speech_final is true
+    if (data.speech_final) {
+      const lineBreak = document.createElement("br");
+      finalCaptions.appendChild(lineBreak);
+    }
+    
     finalDiv.scrollIntoView({ behavior: "smooth" });
-  } else if (!data.utterance_end) {
+  } else if (!data.utterance_end_ms && !data.speech_final) {
     // For interim results, update or create the interim span
     let interimSpan = finalCaptions.querySelector('.interim-final');
     if (!interimSpan) {
@@ -948,7 +999,7 @@ function getConfig() {
     addIfSet('baseUrl');
     addIfSet('language');
     addIfSet('model');
-    addIfSet('utterance_end');
+    addIfSet('utterance_end_ms');
     addIfSet('endpointing');
     addIfSet('smart_format');
     addIfSet('interim_results');
@@ -1020,8 +1071,8 @@ function updateRequestUrl() {
     const model = document.getElementById('model').value;
     if (model) params.append('model', model);
     
-    const utteranceEnd = document.getElementById('utterance_end').value;
-    if (utteranceEnd) params.append('utterance_end', utteranceEnd);
+    const utteranceEnd = document.getElementById('utterance_end_ms').value;
+    if (utteranceEnd) params.append('utterance_end_ms', utteranceEnd);
     
     const endpointing = document.getElementById('endpointing').value;
     if (endpointing) params.append('endpointing', endpointing);

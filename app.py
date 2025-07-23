@@ -277,6 +277,7 @@ def initialize_deepgram_connection(config_options=None):
                 {
                     "transcription": transcript,
                     "is_final": result.is_final,
+                    "speech_final": result.speech_final if hasattr(result, 'speech_final') else False,
                     "timing": timing,
                     "request_id": request_id,
                 },
@@ -784,6 +785,7 @@ def stream_audio_file_from_path(file_path, config):
                     {
                         "transcript": transcript,
                         "is_final": True,
+                        "speech_final": result.speech_final if hasattr(result, 'speech_final') else False,
                         "channel": (
                             result.channel_index[0] if result.channel_index else 0
                         ),
@@ -797,6 +799,7 @@ def stream_audio_file_from_path(file_path, config):
                     {
                         "transcript": transcript,
                         "is_final": False,
+                        "speech_final": result.speech_final if hasattr(result, 'speech_final') else False,
                         "channel": (
                             result.channel_index[0] if result.channel_index else 0
                         ),
