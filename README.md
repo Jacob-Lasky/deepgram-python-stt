@@ -29,10 +29,11 @@ Install the project dependencies.
 ```bash
 pip install -r requirements.txt
 ```
-or with poetry,
+or with uv,
 
 ```bash
-poetry install
+uv venv
+uv pip install -r requirements.txt
 ```
 
 #### Edit the config file
@@ -50,10 +51,10 @@ You need to run the app.py (port 8001) to in your browser and access it at <http
 ```bash
 python app.py
 ```
-or if using poetry,
+or if using uv,
 
 ```bash
-poetry run python app.py
+uv run python app.py
 ```
 
 ## Issue Reporting
