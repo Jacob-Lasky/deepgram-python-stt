@@ -19,6 +19,162 @@ let isAudioMuted = false;
 // Track if request ID has been shown for this session
 let requestIdShown = false;
 
+// Define parameter compatibility
+const PARAMETER_COMPATIBILITY = {
+    // Streaming-only parameters
+    streaming_only: ['interim_results', 'vad_events', 'endpointing', 'utterance_end'],
+    // Batch-only parameters  
+    batch_only: ['paragraphs']
+};
+
+// Function to show parameter notification
+function showParameterNotification(message, type = 'info') {
+    // Remove any existing notification
+    const existingNotification = document.querySelector('.parameter-notification');
+    if (existingNotification) {
+        existingNotification.remove();
+    }
+    
+    // Create notification element
+    const notification = document.createElement('div');
+    notification.className = `parameter-notification ${type}`;
+    notification.innerHTML = `
+        <i class="fas fa-info-circle"></i>
+        <span>${message}</span>
+        <button class="close-notification" onclick="this.parentElement.remove()">
+            <i class="fas fa-times"></i>
+        </button>
+    `;
+    
+    // Insert at the top of the config panel
+    const configPanel = document.querySelector('.config-panel');
+    if (configPanel) {
+        configPanel.insertBefore(notification, configPanel.firstChild);
+        
+        // Auto-remove after 5 seconds
+        setTimeout(() => {
+            if (notification.parentElement) {
+                notification.remove();
+            }
+        }, 5000);
+    }
+}
+
+// Function to disable incompatible parameters and notify user
+function handleParameterCompatibility(isStreaming) {
+    const disabledParams = [];
+    const incompatibleParams = isStreaming ? PARAMETER_COMPATIBILITY.batch_only : PARAMETER_COMPATIBILITY.streaming_only;
+    
+    incompatibleParams.forEach(paramId => {
+        const element = document.getElementById(paramId);
+        if (element) {
+            // If parameter was enabled, disable it and track for notification
+            if (element.type === 'checkbox' && element.checked) {
+                element.checked = false;
+                disabledParams.push(paramId);
+            } else if (element.type !== 'checkbox' && element.value.trim() !== '') {
+                element.value = '';
+                disabledParams.push(paramId);
+            }
+            
+            // Disable the element
+            element.disabled = true;
+            
+            // Update tooltip
+            const mode = isStreaming ? 'streaming' : 'batch';
+            const oppositeMode = isStreaming ? 'batch' : 'streaming';
+            element.title = `${paramId} parameter is only available for ${oppositeMode} transcription, not ${mode}`;
+        }
+    });
+    
+    // Show notification if any parameters were disabled
+    if (disabledParams.length > 0) {
+        const mode = isStreaming ? 'streaming' : 'batch';
+        const paramList = disabledParams.map(p => `'${p}'`).join(', ');
+        const message = `Disabled ${paramList} parameter${disabledParams.length > 1 ? 's' : ''} - not supported in ${mode} mode`;
+        showParameterNotification(message, 'warning');
+        
+        // Update URL to reflect parameter changes
+        updateRequestUrl(getConfig());
+    }
+}
+
+// Function to enable compatible parameters
+function enableCompatibleParameters(isStreaming) {
+    const compatibleParams = isStreaming ? PARAMETER_COMPATIBILITY.streaming_only : PARAMETER_COMPATIBILITY.batch_only;
+    
+    compatibleParams.forEach(paramId => {
+        const element = document.getElementById(paramId);
+        if (element) {
+            element.disabled = false;
+            
+            // Restore normal tooltip
+            switch(paramId) {
+                case 'paragraphs':
+                    element.title = 'Enable automatic paragraph formatting';
+                    break;
+                case 'interim_results':
+                    element.title = 'Enable continuous transcription updates';
+                    break;
+                case 'vad_events':
+                    element.title = 'Enable voice activity detection events';
+                    break;
+                case 'endpointing':
+                    element.title = 'Speech finalization timing in milliseconds';
+                    break;
+                case 'utterance_end':
+                    element.title = 'Utterance end detection timing in milliseconds';
+                    break;
+                default:
+                    element.title = '';
+            }
+        }
+    });
+}
+
+// Function to enable all parameters (neutral state)
+function enableAllParameters() {
+    const allParams = [...PARAMETER_COMPATIBILITY.streaming_only, ...PARAMETER_COMPATIBILITY.batch_only];
+    
+    allParams.forEach(paramId => {
+        const element = document.getElementById(paramId);
+        if (element) {
+            element.disabled = false;
+            
+            // Restore normal tooltip
+            switch(paramId) {
+                case 'paragraphs':
+                    element.title = 'Enable automatic paragraph formatting';
+                    break;
+                case 'interim_results':
+                    element.title = 'Enable continuous transcription updates';
+                    break;
+                case 'vad_events':
+                    element.title = 'Enable voice activity detection events';
+                    break;
+                case 'endpointing':
+                    element.title = 'Speech finalization timing in milliseconds';
+                    break;
+                case 'utterance_end':
+                    element.title = 'Utterance end detection timing in milliseconds';
+                    break;
+                default:
+                    element.title = '';
+            }
+        }
+    });
+}
+
+// Function to disable paragraphs checkbox during streaming
+function disableParagraphsForStreaming() {
+    handleParameterCompatibility(true);
+}
+
+// Function to enable paragraphs checkbox when not streaming
+function enableParagraphsForPrerecorded() {
+    enableAllParameters(); // Enable all parameters in neutral state
+}
+
 // Function to stop file streaming
 function stopFileStreaming() {
     if (isStreamingFile) {
@@ -34,6 +190,9 @@ function stopFileStreaming() {
         // Hide progress bar and stop audio
         hideStreamingProgress();
         stopAudioPlayback();
+        
+        // Re-enable paragraphs checkbox when not streaming
+        enableParagraphsForPrerecorded();
         
         // Reset interim_results to the checkbox state
         const config = getConfig();
@@ -939,6 +1098,8 @@ async function startRecording() {
   isRecording = true;
   // Reset request ID flag for new session
   requestIdShown = false;
+  // Disable paragraphs checkbox during streaming
+  disableParagraphsForStreaming();
   microphone = await getMicrophone();
   console.log("Client: Waiting to open microphone");
   
@@ -978,6 +1139,9 @@ async function stopRecording() {
     isRecording = false;
     console.log("Client: Microphone closed");
     document.body.classList.remove("recording");
+    
+    // Re-enable paragraphs checkbox when not streaming
+    enableParagraphsForPrerecorded();
     
     // Reset interim_results to the checkbox state
     const config = getConfig();
@@ -1589,6 +1753,9 @@ document.addEventListener("DOMContentLoaded", () => {
     
     // Function to upload file for batch processing
     function uploadFile(file) {
+        // Handle parameter compatibility for batch processing
+        handleParameterCompatibility(false); // false = batch mode
+        
         const reader = new FileReader();
         
         reader.onload = function(e) {
@@ -1677,6 +1844,8 @@ document.addEventListener("DOMContentLoaded", () => {
         
         // Reset request ID flag for new session
         requestIdShown = false;
+        // Disable paragraphs checkbox during streaming
+        disableParagraphsForStreaming();
         
         // Get current configuration
         const config = getConfig();
@@ -1885,4 +2054,7 @@ document.addEventListener("DOMContentLoaded", () => {
             }
         });
     }
+    
+    // Initialize all parameters as enabled (neutral state by default)
+    enableAllParameters();
 });
