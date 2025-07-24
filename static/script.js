@@ -374,6 +374,8 @@ let DEFAULT_CONFIG = {
     "diarize": false,
     "filler_words": false,
     "paragraphs": false,
+    "utterances": false,
+    "detect_entities": false,
     "extra": {}
 };
 
@@ -544,7 +546,7 @@ function setDefaultValues() {
     // Set checkbox defaults
     ['smart_format', 'interim_results', 'no_delay', 'dictation', 
      'numerals', 'profanity_filter', 'punctuate', 'multichannel', 'mip_opt_out',
-     'vad_events', 'diarize', 'filler_words', 'paragraphs'].forEach(id => {
+     'vad_events', 'diarize', 'filler_words', 'paragraphs', 'utterances', 'detect_entities'].forEach(id => {
         const element = document.getElementById(id);
         if (element && DEFAULT_CONFIG[id] !== undefined) {
             element.checked = DEFAULT_CONFIG[id];
@@ -604,7 +606,7 @@ function importConfig(input) {
 
     ['smart_format', 'interim_results', 'no_delay', 'dictation', 
      'numerals', 'profanity_filter', 'punctuate', 'multichannel', 'mip_opt_out',
-     'vad_events', 'diarize', 'filler_words', 'paragraphs'].forEach(id => {
+     'vad_events', 'diarize', 'filler_words', 'paragraphs', 'utterances', 'detect_entities'].forEach(id => {
         const element = document.getElementById(id);
         if (element) {
             element.checked = false;
@@ -1187,6 +1189,8 @@ function getConfig() {
     addIfSet('diarize');
     addIfSet('filler_words');
     addIfSet('paragraphs');
+    addIfSet('utterances');
+    addIfSet('detect_entities');
     
     // Handle redact multi-select specially
     const redactElement = document.getElementById('redact');
@@ -1318,6 +1322,12 @@ function updateRequestUrl() {
     
     const paragraphs = document.getElementById('paragraphs').checked;
     if (paragraphs) params.append('paragraphs', 'true');
+    
+    const utterances = document.getElementById('utterances').checked;
+    if (utterances) params.append('utterances', 'true');
+    
+    const detectEntities = document.getElementById('detect_entities').checked;
+    if (detectEntities) params.append('detect_entities', 'true');
     
     // Add extra parameters if any
     const extraParams = document.getElementById('extraParams');
