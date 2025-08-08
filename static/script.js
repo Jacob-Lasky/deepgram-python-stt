@@ -346,7 +346,7 @@ function toggleAudioMute() {
 }
 
 let DEFAULT_CONFIG = {
-    "base_url": "api.deepgram.com",
+    "baseUrl": "api.deepgram.com",
     "model": "nova-3",
     "language": "en",
     "utterance_end_ms": "1000",
@@ -1116,7 +1116,10 @@ async function startRecording() {
   // Update the URL display to show interim_results=true
   updateRequestUrl(config);
   
-  socket.emit("toggle_transcription", { action: "start", config: config });
+  console.log("DEBUG: Frontend config:", config);
+  console.log("DEBUG: Base URL being sent:", config.baseUrl);
+  
+  socket.emit("toggle_transcription", { action: "start", config: config, baseUrl: config.baseUrl });
   
   // Display the URL in the interim results container
   const interimCaptions = document.getElementById("captions");
@@ -1797,7 +1800,8 @@ document.addEventListener("DOMContentLoaded", () => {
             },
             body: JSON.stringify({
               file: fileData,
-              config: params
+              config: params,
+              baseUrl: getConfig().baseUrl
             })
           })
           .then(response => response.json())
@@ -1933,7 +1937,8 @@ document.addEventListener("DOMContentLoaded", () => {
                 
                 socket.emit('start_file_streaming', {
                     file_path: result.file_path,
-                    config: config
+                    config: config,
+                    baseUrl: config.baseUrl
                 }, (response) => {
                     console.log('Start streaming response:', response);
                     

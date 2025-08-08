@@ -41,7 +41,6 @@ with open("config/defaults.json", "r") as f:
 # Global variables
 dg_connection = None
 deepgram = None
-config = DeepgramClientOptions(url="wss://api.deepgram.com/v1/listen")
 
 # Store streaming responses for raw response display
 streaming_responses = {"microphone": [], "file_streaming": []}
@@ -50,12 +49,10 @@ streaming_responses = {"microphone": [], "file_streaming": []}
 current_session_info = {
     "microphone": {"parameters": {}, "request_id": None},
     "file_streaming": {"parameters": {}, "request_id": None},
-    "file_upload": {"parameters": {}, "request_id": None}
+    "file_upload": {"parameters": {}, "request_id": None},
 }
 
-# Set up client configuration
-config.verbose = logging.INFO
-config.options = {"keepalive": "true"}
+# Client configuration will be set dynamically per connection
 
 streaming_thread = None
 stop_streaming = False
@@ -174,8 +171,10 @@ def upload_file():
 
             # Store parameters for raw response display
             current_session_info["file_upload"]["parameters"] = params.copy()
-            logger.info(f"Stored parameters for file upload: {current_session_info['file_upload']['parameters']}")
-            
+            logger.info(
+                f"Stored parameters for file upload: {current_session_info['file_upload']['parameters']}"
+            )
+
             # Extract request_id from result if available
             request_id = None
             logger.info(f"Result structure: {type(result)}")
@@ -188,17 +187,21 @@ def upload_file():
                 else:
                     logger.info("No metadata in result")
             current_session_info["file_upload"]["request_id"] = request_id
-            logger.info(f"Stored request_id: {current_session_info['file_upload']['request_id']}")
+            logger.info(
+                f"Stored request_id: {current_session_info['file_upload']['request_id']}"
+            )
 
             # Emit raw response data to frontend for debugging
             if result and not result.get("error"):
                 raw_response_data = {
-                    "type": "file_upload", 
+                    "type": "file_upload",
                     "data": result,
                     "request_id": current_session_info["file_upload"]["request_id"],
-                    "parameters": current_session_info["file_upload"]["parameters"]
+                    "parameters": current_session_info["file_upload"]["parameters"],
                 }
-                logger.info(f"About to emit raw response: request_id={raw_response_data['request_id']}, parameters_keys={list(raw_response_data['parameters'].keys()) if raw_response_data['parameters'] else 'None'}")
+                logger.info(
+                    f"About to emit raw response: request_id={raw_response_data['request_id']}, parameters_keys={list(raw_response_data['parameters'].keys()) if raw_response_data['parameters'] else 'None'}"
+                )
                 socketio.emit("raw_response", raw_response_data)
                 logger.info(f"Emitted raw response data for file upload")
 
@@ -221,25 +224,32 @@ def upload_file():
 
 
 # Deepgram connection handling
-def initialize_deepgram_connection(config_options=None):
-    global dg_connection, deepgram, config, current_session_info
+def initialize_deepgram_connection(config_options=None, base_url="api.deepgram.com"):
+    global dg_connection, deepgram, current_session_info
 
     if not config_options:
         logger.warning("No configuration options provided")
         return
-    
-    # Store parameters for raw response display
+
+    # Store parameters for raw response display (including baseUrl for debugging)
     current_session_info["microphone"]["parameters"] = config_options.copy()
 
-    # Update client config with base URL and create new client
-    if "baseUrl" in config_options:
-        base_url = config_options.pop("baseUrl")
-        config.url = f"wss://{base_url}"  # Use wss:// for secure WebSocket
-        deepgram = DeepgramClient(API_KEY, config)
+    # Remove baseUrl from config_options before passing to LiveOptions
+    live_options_config = config_options.copy()
+    live_options_config.pop("baseUrl", None)  # Remove baseUrl if present
 
-    if not deepgram:
-        logger.warning("No base URL provided")
-        return
+    # Construct WebSocket URL with base URL
+    # Use WS for local/custom instances, WSS for official Deepgram API
+    if base_url == "api.deepgram.com":
+        websocket_url = f"wss://{base_url}/v1/listen"
+    else:
+        # Custom instances (like AWS) likely use WS instead of WSS
+        websocket_url = f"ws://{base_url}/v1/listen"
+    logger.info(f"Using Deepgram WebSocket URL: {websocket_url}")
+
+    # Create new client config with dynamic base URL
+    client_config = DeepgramClientOptions(url=websocket_url)
+    deepgram = DeepgramClient(API_KEY, client_config)
 
     dg_connection = deepgram.listen.websocket.v("1")
 
@@ -269,7 +279,10 @@ def initialize_deepgram_connection(config_options=None):
                 if hasattr(result.metadata, "request_id"):
                     request_id = result.metadata.request_id
                     # Store request_id for raw response display
-                    if request_id and not current_session_info["microphone"]["request_id"]:
+                    if (
+                        request_id
+                        and not current_session_info["microphone"]["request_id"]
+                    ):
                         current_session_info["microphone"]["request_id"] = request_id
 
             socketio.emit(
@@ -277,7 +290,11 @@ def initialize_deepgram_connection(config_options=None):
                 {
                     "transcription": transcript,
                     "is_final": result.is_final,
-                    "speech_final": result.speech_final if hasattr(result, 'speech_final') else False,
+                    "speech_final": (
+                        result.speech_final
+                        if hasattr(result, "speech_final")
+                        else False
+                    ),
                     "timing": timing,
                     "request_id": request_id,
                 },
@@ -330,13 +347,22 @@ def initialize_deepgram_connection(config_options=None):
     dg_connection.on(LiveTranscriptionEvents.Close, on_close)
     dg_connection.on(LiveTranscriptionEvents.Error, on_error)
 
-    options = LiveOptions(**config_options)
+    options = LiveOptions(**live_options_config)
 
     logger.info(f"Starting Deepgram connection with options: {options}")
-
-    if dg_connection.start(options) is False:
-        logger.warning("Failed to start connection")
-        exit()
+    logger.info(f"WebSocket URL being used: {websocket_url}")
+    logger.info(f"Live options config (cleaned): {live_options_config}")
+    
+    try:
+        connection_result = dg_connection.start(options)
+        logger.info(f"Connection start result: {connection_result}")
+        if connection_result is False:
+            logger.warning("Failed to start connection - connection returned False")
+            return
+    except Exception as e:
+        logger.error(f"Exception during connection start: {e}")
+        logger.error(f"Exception type: {type(e)}")
+        return
 
 
 # SocketIO event handlers
@@ -358,7 +384,12 @@ def handle_toggle_transcription(data):
         # Clear session info for new session
         current_session_info["microphone"] = {"parameters": {}, "request_id": None}
         config = data.get("config", {})
-        initialize_deepgram_connection(config)
+        base_url = config.get(
+            "baseUrl", "api.deepgram.com"
+        )  # Get baseUrl from config object
+        logger.info(f"DEBUG: Received baseUrl from frontend: '{base_url}'")
+        logger.info(f"DEBUG: Full data received: {data}")
+        initialize_deepgram_connection(config, base_url)
     elif action == "stop" and dg_connection:
         logger.info("Closing Deepgram connection")
         dg_connection.finish()
@@ -387,43 +418,30 @@ def handle_start_file_streaming(data, callback=None):
     global streaming_thread, stop_streaming
 
     try:
-        logger.info("=== START FILE STREAMING EVENT RECEIVED ===")
-        logger.info(f"Data received: {data}")
+        file_path = data.get("file_path")
+        config = data.get("config", {})
+        base_url = config.get(
+            "baseUrl", "api.deepgram.com"
+        )  # Get baseUrl from config object
+
+        if not file_path:
+            error_msg = "No file path provided"
+            logger.error(error_msg)
+            if callback:
+                callback({"error": error_msg})
+            return
 
         # Clear accumulated responses for new session
         streaming_responses["file_streaming"] = []
         # Clear session info for new session
         current_session_info["file_streaming"] = {"parameters": {}, "request_id": None}
 
-        if not data or "file_path" not in data:
-            error_msg = "No file_path provided"
-            logger.error(error_msg)
-            if callback:
-                callback({"error": error_msg})
-            return
-
-        file_path = data["file_path"]
-        config = data.get("config", {})
-        
         # Store parameters for raw response display
         current_session_info["file_streaming"]["parameters"] = config.copy()
 
-        logger.info(f"File path: {file_path}")
+        logger.info(f"Starting file streaming for: {file_path}")
         logger.info(f"Config: {config}")
-
-        # Check if file exists
-        if not os.path.exists(file_path):
-            error_msg = f"File not found: {file_path}"
-            logger.error(error_msg)
-            if callback:
-                callback({"error": error_msg})
-            return
-
-        # Stop any existing streaming
-        if streaming_thread and streaming_thread.is_alive():
-            logger.info("Stopping existing streaming thread")
-            stop_streaming = True
-            streaming_thread.join(timeout=5)
+        logger.info(f"Using base URL: {base_url}")
 
         # Reset stop flag
         stop_streaming = False
@@ -525,18 +543,26 @@ def handle_file_upload(data, callback=None):
     try:
         # Use the config parameters from the client
         params = data.get("config", {})
-        # Remove base_url as it's not needed for file processing
-        params.pop("baseUrl", None)
+        base_url = data.get("baseUrl", "api.deepgram.com")
+
+        # Construct the API URL for batch processing
+        deepgram_api_url = f"https://{base_url}/v1/listen"
+
         logger.info("Processing audio with HTTPS")
         logger.info(f"File path: {file_path}")
         logger.info(f"File size: {os.path.getsize(file_path)} bytes")
         logger.info(f"Parameters: {params}")
+        logger.info(f"Using Deepgram API URL: {deepgram_api_url}")
 
         # Store parameters for raw response display
         current_session_info["file_upload"]["parameters"] = params.copy()
-        logger.info(f"Stored parameters for file upload: {current_session_info['file_upload']['parameters']}")
-        
-        result = process_audio(file_path, params, verbose=False)
+        logger.info(
+            f"Stored parameters for file upload: {current_session_info['file_upload']['parameters']}"
+        )
+
+        result = process_audio(
+            file_path, params, deepgram_api_url=deepgram_api_url, verbose=False
+        )
         logger.info(f"Processing completed successfully")
         logger.info(
             f"Result keys: {list(result.keys()) if isinstance(result, dict) else 'Not a dict'}"
@@ -554,17 +580,21 @@ def handle_file_upload(data, callback=None):
             else:
                 logger.info("No metadata in result")
         current_session_info["file_upload"]["request_id"] = request_id
-        logger.info(f"Stored request_id: {current_session_info['file_upload']['request_id']}")
+        logger.info(
+            f"Stored request_id: {current_session_info['file_upload']['request_id']}"
+        )
 
         # Emit raw response data to frontend for debugging
         if result and not result.get("error"):
             raw_response_data = {
-                "type": "file_upload", 
+                "type": "file_upload",
                 "data": result,
                 "request_id": current_session_info["file_upload"]["request_id"],
-                "parameters": current_session_info["file_upload"]["parameters"]
+                "parameters": current_session_info["file_upload"]["parameters"],
             }
-            logger.info(f"About to emit raw response: request_id={raw_response_data['request_id']}, parameters_keys={list(raw_response_data['parameters'].keys()) if raw_response_data['parameters'] else 'None'}")
+            logger.info(
+                f"About to emit raw response: request_id={raw_response_data['request_id']}, parameters_keys={list(raw_response_data['parameters'].keys()) if raw_response_data['parameters'] else 'None'}"
+            )
             socketio.emit("raw_response", raw_response_data)
             logger.info(f"Emitted raw response data for file upload")
 
@@ -680,7 +710,7 @@ def handle_stream_file(data, callback=None):
             os.remove(file_path)
 
 
-def stream_audio_file_from_path(file_path, config):
+def stream_audio_file_from_path(file_path, config, base_url="api.deepgram.com"):
     """Stream audio file from a file path"""
     global stop_streaming
 
@@ -691,14 +721,17 @@ def stream_audio_file_from_path(file_path, config):
             raise ValueError("Deepgram API key not found")
 
         # Create a new Deepgram client for this streaming session
-        client_options = DeepgramClientOptions(
-            verbose=logging.INFO,
-            options={"keepalive": "true"},
-        )
+        # Use WS for local/custom instances, WSS for official Deepgram API
+        if base_url == "api.deepgram.com":
+            websocket_url = f"wss://{base_url}/v1/listen"
+        else:
+            # Custom instances (like AWS) likely use WS instead of WSS
+            websocket_url = f"ws://{base_url}/v1/listen"
+        logger.info(f"Using Deepgram WebSocket URL for file streaming: {websocket_url}")
 
-        # Set custom endpoint if baseUrl is provided
-        if config.get("baseUrl") and config["baseUrl"] != "api.deepgram.com":
-            client_options.url = f"https://{config['baseUrl']}"
+        client_options = DeepgramClientOptions(
+            verbose=logging.INFO, options={"keepalive": "true"}, url=websocket_url
+        )
 
         deepgram = DeepgramClient(deepgram_api_key, client_options)
         logger.info("Created new Deepgram client for file streaming")
@@ -775,8 +808,13 @@ def stream_audio_file_from_path(file_path, config):
                 if hasattr(result.metadata, "request_id"):
                     request_id = result.metadata.request_id
                     # Store request_id for raw response display
-                    if request_id and not current_session_info["file_streaming"]["request_id"]:
-                        current_session_info["file_streaming"]["request_id"] = request_id
+                    if (
+                        request_id
+                        and not current_session_info["file_streaming"]["request_id"]
+                    ):
+                        current_session_info["file_streaming"][
+                            "request_id"
+                        ] = request_id
 
             if result.is_final:
                 # Emit final transcript to client
@@ -785,7 +823,11 @@ def stream_audio_file_from_path(file_path, config):
                     {
                         "transcript": transcript,
                         "is_final": True,
-                        "speech_final": result.speech_final if hasattr(result, 'speech_final') else False,
+                        "speech_final": (
+                            result.speech_final
+                            if hasattr(result, "speech_final")
+                            else False
+                        ),
                         "channel": (
                             result.channel_index[0] if result.channel_index else 0
                         ),
@@ -799,7 +841,11 @@ def stream_audio_file_from_path(file_path, config):
                     {
                         "transcript": transcript,
                         "is_final": False,
-                        "speech_final": result.speech_final if hasattr(result, 'speech_final') else False,
+                        "speech_final": (
+                            result.speech_final
+                            if hasattr(result, "speech_final")
+                            else False
+                        ),
                         "channel": (
                             result.channel_index[0] if result.channel_index else 0
                         ),
@@ -834,8 +880,12 @@ def stream_audio_file_from_path(file_path, config):
                                     streaming_responses["file_streaming"]
                                 ),
                             },
-                            "request_id": current_session_info["file_streaming"]["request_id"],
-                            "parameters": current_session_info["file_streaming"]["parameters"],
+                            "request_id": current_session_info["file_streaming"][
+                                "request_id"
+                            ],
+                            "parameters": current_session_info["file_streaming"][
+                                "parameters"
+                            ],
                         },
                     )
                     logger.info(
