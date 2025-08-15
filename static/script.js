@@ -444,6 +444,65 @@ socket.on('stream_finished', (data) => {
     }, 2000);
 });
 
+// Listen for real-time streaming responses
+socket.on('streaming_response', (data) => {
+    console.log('Received streaming response:', data);
+    
+    // Display in a dedicated streaming responses area
+    const responsesContainer = document.getElementById('streaming-responses');
+    if (responsesContainer) {
+        const responseDiv = document.createElement('div');
+        responseDiv.className = 'streaming-response-item';
+        responseDiv.innerHTML = `
+            <div class="response-header">
+                <span class="response-count">#${data.response_count}</span>
+                <span class="response-timestamp">${new Date(data.timestamp * 1000).toLocaleTimeString()}</span>
+                ${data.error ? '<span class="response-error">⚠️ Error</span>' : ''}
+            </div>
+            <pre class="response-content">${JSON.stringify(data.response, null, 2)}</pre>
+        `;
+        
+        responsesContainer.appendChild(responseDiv);
+        responsesContainer.scrollTop = responsesContainer.scrollHeight;
+    }
+});
+
+// Listen for streaming responses saved notification
+socket.on('responses_saved', (data) => {
+    console.log('Streaming responses saved:', data);
+    
+    // Show notification to user
+    const notification = document.createElement('div');
+    notification.className = 'save-notification success';
+    notification.innerHTML = `
+        <i class="fas fa-check-circle"></i>
+        <span>Saved ${data.total_responses} streaming responses to ${data.filename}</span>
+    `;
+    document.body.appendChild(notification);
+    
+    // Auto-remove notification after 5 seconds
+    setTimeout(() => {
+        notification.remove();
+    }, 5000);
+});
+
+// Listen for streaming responses save errors
+socket.on('responses_save_error', (data) => {
+    console.log('Error saving streaming responses:', data);
+    
+    const notification = document.createElement('div');
+    notification.className = 'save-notification error';
+    notification.innerHTML = `
+        <i class="fas fa-exclamation-circle"></i>
+        <span>${data.message}</span>
+    `;
+    document.body.appendChild(notification);
+    
+    setTimeout(() => {
+        notification.remove();
+    }, 5000);
+});
+
 // Listen for transcript events from file streaming
 socket.on('transcript', (data) => {
     console.log('Received transcript:', data);
