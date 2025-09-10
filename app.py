@@ -234,9 +234,14 @@ def initialize_deepgram_connection(config_options=None, base_url="api.deepgram.c
     # Store parameters for raw response display (including baseUrl for debugging)
     current_session_info["microphone"]["parameters"] = config_options.copy()
 
-    # Remove baseUrl from config_options before passing to LiveOptions
+    # Remove baseUrl and entity_prompt from config_options before passing to LiveOptions
     live_options_config = config_options.copy()
     live_options_config.pop("baseUrl", None)  # Remove baseUrl if present
+
+    # Extract entity_prompt to add it via extra parameter
+    addons = {}
+    if "entity_prompt" in live_options_config:
+        addons["entity_prompt"] = live_options_config.pop("entity_prompt", None)
 
     # Construct WebSocket URL with base URL
     # Use WS for local/custom instances, WSS for official Deepgram API
@@ -347,14 +352,14 @@ def initialize_deepgram_connection(config_options=None, base_url="api.deepgram.c
     dg_connection.on(LiveTranscriptionEvents.Close, on_close)
     dg_connection.on(LiveTranscriptionEvents.Error, on_error)
 
-    options = LiveOptions(**live_options_config)
-
-    logger.info(f"Starting Deepgram connection with options: {options}")
     logger.info(f"WebSocket URL being used: {websocket_url}")
     logger.info(f"Live options config (cleaned): {live_options_config}")
-    
+    logger.info(f"Addons: {addons}")
+
     try:
-        connection_result = dg_connection.start(options)
+        connection_result = dg_connection.start(
+            live_options_config, addons=addons if any(addons.values()) else None
+        )
         logger.info(f"Connection start result: {connection_result}")
         if connection_result is False:
             logger.warning("Failed to start connection - connection returned False")
@@ -796,15 +801,18 @@ def stream_audio_file_from_path(file_path, config, base_url="api.deepgram.com"):
                     result_dict = str(result)
                 streaming_responses["file_streaming"].append(result_dict)
                 logger.debug(f"Stored file streaming response: {type(result).__name__}")
-                
+
                 # Emit real-time streaming response to UI
-                socketio.emit("streaming_response", {
-                    "type": "file_streaming",
-                    "response": result_dict,
-                    "timestamp": time.time(),
-                    "response_count": len(streaming_responses["file_streaming"])
-                })
-                
+                socketio.emit(
+                    "streaming_response",
+                    {
+                        "type": "file_streaming",
+                        "response": result_dict,
+                        "timestamp": time.time(),
+                        "response_count": len(streaming_responses["file_streaming"]),
+                    },
+                )
+
             except Exception as e:
                 logger.error(f"Error storing file streaming response: {e}")
                 # Fallback: store as string representation
@@ -812,35 +820,50 @@ def stream_audio_file_from_path(file_path, config, base_url="api.deepgram.com"):
                     fallback_response = str(result)
                     streaming_responses["file_streaming"].append(fallback_response)
                     # Emit fallback response to UI
-                    socketio.emit("streaming_response", {
-                        "type": "file_streaming",
-                        "response": fallback_response,
-                        "timestamp": time.time(),
-                        "response_count": len(streaming_responses["file_streaming"]),
-                        "error": str(e)
-                    })
+                    socketio.emit(
+                        "streaming_response",
+                        {
+                            "type": "file_streaming",
+                            "response": fallback_response,
+                            "timestamp": time.time(),
+                            "response_count": len(
+                                streaming_responses["file_streaming"]
+                            ),
+                            "error": str(e),
+                        },
+                    )
                 except:
                     error_response = f"Error storing result: {str(e)}"
                     streaming_responses["file_streaming"].append(error_response)
-                    socketio.emit("streaming_response", {
-                        "type": "file_streaming", 
-                        "response": error_response,
-                        "timestamp": time.time(),
-                        "response_count": len(streaming_responses["file_streaming"]),
-                        "error": "Double error in storage"
-                    })
+                    socketio.emit(
+                        "streaming_response",
+                        {
+                            "type": "file_streaming",
+                            "response": error_response,
+                            "timestamp": time.time(),
+                            "response_count": len(
+                                streaming_responses["file_streaming"]
+                            ),
+                            "error": "Double error in storage",
+                        },
+                    )
 
             # Safely extract transcript with fallback handling
             transcript = ""
             try:
-                if hasattr(result, 'channel') and result.channel:
-                    if hasattr(result.channel, 'alternatives') and result.channel.alternatives:
+                if hasattr(result, "channel") and result.channel:
+                    if (
+                        hasattr(result.channel, "alternatives")
+                        and result.channel.alternatives
+                    ):
                         if len(result.channel.alternatives) > 0:
                             transcript = result.channel.alternatives[0].transcript or ""
             except Exception as e:
-                logger.error(f"Error extracting transcript from file streaming result: {e}")
+                logger.error(
+                    f"Error extracting transcript from file streaming result: {e}"
+                )
                 # Continue processing even if transcript extraction fails
-                
+
             if not transcript:  # Skip empty transcripts
                 return
 
@@ -993,41 +1016,51 @@ def stream_audio_file_from_path(file_path, config, base_url="api.deepgram.com"):
                 timestamp = int(time.time())
                 responses_filename = f"streaming_responses_{timestamp}.json"
                 responses_path = os.path.join("outputs", responses_filename)
-                
+
                 # Create outputs directory if it doesn't exist
                 os.makedirs("outputs", exist_ok=True)
-                
+
                 # Prepare data to save
                 save_data = {
                     "session_info": {
                         "timestamp": timestamp,
-                        "parameters": current_session_info["file_streaming"]["parameters"],
-                        "request_id": current_session_info["file_streaming"]["request_id"],
-                        "total_responses": len(streaming_responses["file_streaming"])
+                        "parameters": current_session_info["file_streaming"][
+                            "parameters"
+                        ],
+                        "request_id": current_session_info["file_streaming"][
+                            "request_id"
+                        ],
+                        "total_responses": len(streaming_responses["file_streaming"]),
                     },
-                    "streaming_responses": streaming_responses["file_streaming"]
+                    "streaming_responses": streaming_responses["file_streaming"],
                 }
-                
-                with open(responses_path, 'w', encoding='utf-8') as f:
+
+                with open(responses_path, "w", encoding="utf-8") as f:
                     json.dump(save_data, f, indent=2, default=str)
-                
-                logger.info(f"Saved {len(streaming_responses['file_streaming'])} streaming responses to {responses_path}")
-                
+
+                logger.info(
+                    f"Saved {len(streaming_responses['file_streaming'])} streaming responses to {responses_path}"
+                )
+
                 # Emit file saved notification to UI
-                socketio.emit("responses_saved", {
-                    "message": f"Streaming responses saved to {responses_filename}",
-                    "filename": responses_filename,
-                    "path": responses_path,
-                    "total_responses": len(streaming_responses["file_streaming"])
-                })
+                socketio.emit(
+                    "responses_saved",
+                    {
+                        "message": f"Streaming responses saved to {responses_filename}",
+                        "filename": responses_filename,
+                        "path": responses_path,
+                        "total_responses": len(streaming_responses["file_streaming"]),
+                    },
+                )
             else:
                 logger.info("No streaming responses to save")
-                
+
         except Exception as e:
             logger.error(f"Error saving streaming responses: {e}")
-            socketio.emit("responses_save_error", {
-                "message": f"Failed to save streaming responses: {str(e)}"
-            })
+            socketio.emit(
+                "responses_save_error",
+                {"message": f"Failed to save streaming responses: {str(e)}"},
+            )
 
         # Emit stream finished event
         socketio.emit("stream_finished", {"message": "File streaming completed"})
