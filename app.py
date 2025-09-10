@@ -259,7 +259,44 @@ def initialize_deepgram_connection(config_options=None, base_url="api.deepgram.c
     dg_connection = deepgram.listen.websocket.v("1")
 
     def on_open(self, open, **kwargs):
-        logger.info(f"\n\n{open}\n\n")
+        logger.info("\n\nDeepgram connection opened\n\n")
+        logger.info(f"Deepgram connection created: {dg_connection}")
+        logger.info(f"Open event data: {open}")
+
+        # Access WebSocket headers
+        try:
+            # Access the underlying websocket object headers
+            if hasattr(dg_connection, "_socket"):
+                ws = dg_connection._socket
+                logger.info(f"Underlying websocket object: {ws}")
+
+                # Access request and response headers using standard websockets library approach
+                if hasattr(ws, "request"):
+                    logger.info(
+                        f"WebSocket request headers: {dict(ws.request.headers)}"
+                    )
+                if hasattr(ws, "response"):
+                    logger.info(
+                        f"WebSocket response headers: {dict(ws.response.headers)}"
+                    )
+                    current_session_info["microphone"]["request_id"] = (
+                        ws.response.headers.get("dg-request-id")
+                    )
+                    logger.info(
+                        f"\n\nRequest ID: {current_session_info['microphone']['request_id']}\n\n"
+                    )
+                    if current_session_info["microphone"]["request_id"]:
+                        socketio.emit(
+                            "request_id_update",
+                            {
+                                "request_id": current_session_info["microphone"][
+                                    "request_id"
+                                ]
+                            },
+                        )
+
+        except Exception as e:
+            logger.error(f"Error accessing WebSocket headers: {e}")
 
     def on_message(self, result, **kwargs):
         # Store the full result for raw response display
@@ -304,10 +341,6 @@ def initialize_deepgram_connection(config_options=None, base_url="api.deepgram.c
                     "request_id": request_id,
                 },
             )
-
-            # Emit request_id separately when available (for first message)
-            if request_id:
-                socketio.emit("request_id_update", {"request_id": request_id})
 
     def on_close(self, close, **kwargs):
         logger.info(f"\n\n{close}\n\n")
