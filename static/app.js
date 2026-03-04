@@ -166,21 +166,13 @@ function appData() {
               const el = this.$refs.transcriptFinal;
               if (el) el.scrollTop = el.scrollHeight;
             });
+            this._logDebug('final', (data.speaker != null ? `[Speaker ${data.speaker}] ` : '') + text);
           }
           this.addResponse('final', data);
         } else {
           this.interimTranscript = (data.speaker != null ? `[Speaker ${data.speaker}] ` : '') + text;
           if (text.trim()) {
-            const now = new Date();
-            const time = now.toLocaleTimeString('en-US', { hour12: false, hour: '2-digit', minute: '2-digit', second: '2-digit' }) +
-              '.' + String(now.getMilliseconds()).padStart(3, '0');
-            this.interimLog.push({ time, text: (data.speaker != null ? `[Speaker ${data.speaker}] ` : '') + text });
-            if (this.debugPanelOpen) {
-              this.$nextTick(() => {
-                const el = this.$refs.debugLog;
-                if (el) el.scrollTop = el.scrollHeight;
-              });
-            }
+            this._logDebug('interim', (data.speaker != null ? `[Speaker ${data.speaker}] ` : '') + text);
           }
           this.addResponse('interim', data);
         }
@@ -664,6 +656,19 @@ function appData() {
     },
 
     // ---- Transcript ----
+    _logDebug(type, text) {
+      const now = new Date();
+      const time = now.toLocaleTimeString('en-US', { hour12: false, hour: '2-digit', minute: '2-digit', second: '2-digit' }) +
+        '.' + String(now.getMilliseconds()).padStart(3, '0');
+      this.interimLog.push({ time, type, text });
+      if (this.debugPanelOpen) {
+        this.$nextTick(() => {
+          const el = this.$refs.debugLog;
+          if (el) el.scrollTop = el.scrollHeight;
+        });
+      }
+    },
+
     clearTranscript() {
       this.finalTranscript = '';
       this.interimTranscript = '';

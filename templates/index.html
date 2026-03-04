@@ -885,7 +885,18 @@
     }
     .debug-entry:last-child { border-bottom: none; }
     .debug-time { color: #4b5563; flex-shrink: 0; }
-    .debug-text { color: rgba(245,158,11,0.8); }
+    .debug-tag {
+      flex-shrink: 0;
+      font-size: 10px;
+      font-weight: 600;
+      padding: 0 4px;
+      border-radius: 3px;
+      align-self: center;
+    }
+    .debug-tag.interim { background: rgba(245,158,11,0.15); color: #f59e0b; }
+    .debug-tag.final   { background: rgba(19,239,149,0.15);  color: #13ef95; }
+    .debug-text.interim { color: rgba(245,158,11,0.8); }
+    .debug-text.final   { color: rgba(19,239,149,0.9); }
 
     /* File streaming state badge */
     .file-state {
@@ -1477,7 +1488,8 @@
               <template x-for="(entry, i) in interimLog" :key="i">
                 <div class="debug-entry">
                   <span class="debug-time" x-text="entry.time"></span>
-                  <span class="debug-text" x-text="entry.text"></span>
+                  <span class="debug-tag" :class="entry.type" x-text="entry.type"></span>
+                  <span class="debug-text" :class="entry.type" x-text="entry.text"></span>
                 </div>
               </template>
             </div>
