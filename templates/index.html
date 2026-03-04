@@ -1,277 +1,1564 @@
 <!DOCTYPE html>
-<html>
-  <head>
-    <meta charset="utf-8" />
-    <title>Deepgram Streaming STT</title>
-    <link
-      rel="stylesheet"
-      href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css"
-    />
-    <link rel="stylesheet" href="../static/style.css" />
-    <script
-      src="https://cdn.socket.io/4.5.3/socket.io.min.js"
-      crossorigin="anonymous"
-    ></script>
-    <script src="../static/script.js"></script>
-  </head>
-  <body class="">
-    <div class="container">
-      <div class="column left-column">
-        <div class="content">
-          <div class="button-container">
-            <input type="checkbox" id="record" class="mic-checkbox" />
-            <label for="record" class="mic-button">
-            </label>
-          </div>
-          
-          <div class="upload-container">
-            <input type="file" id="audioFile" accept="audio/*" style="display: none;">
-            <div class="upload-options">
-              <label class="stream-option">
-                <input type="checkbox" id="streamPrerecorded" class="stream-checkbox">
-                <span class="checkmark"></span>
-                Stream Prerecorded File
-              </label>
-            </div>
-            <button id="uploadButton" class="upload-button">
-              <i class="fas fa-upload"></i> Upload Audio
-            </button>
-            
-            <!-- File Streaming Progress Bar -->
-            <div id="streamingProgress" class="streaming-progress" style="display: none;">
-              <div class="progress-header">
-                <span id="streamingStatus">Preparing to stream...</span>
-                <span id="streamingTime">0:00</span>
-              </div>
-              <div class="progress-bar-container">
-                <div class="progress-bar" id="progressBar">
-                  <div class="progress-fill" id="progressFill"></div>
-                </div>
-              </div>
-              <div class="progress-details">
-                <span id="streamingDetails">Initializing...</span>
-              </div>
-            </div>
-            
-            <!-- Audio Player for Streaming Playback -->
-            <div id="audioPlayerContainer" class="audio-player-container" style="display: none;">
-              <div class="audio-player-header">
-                <span class="audio-player-title">🎵 Now Playing</span>
-                <button id="toggleAudioBtn" class="toggle-audio-btn">
-                  <i class="fas fa-volume-up"></i>
-                </button>
-              </div>
-              <audio id="streamingAudio" class="streaming-audio" controls>
-                Your browser does not support the audio element.
-              </audio>
-            </div>
-            <div id="dropZone" class="drop-zone">
-              <i class="fas fa-cloud-upload-alt"></i>
-              <p>Drag & drop audio files here</p>
-            </div>
-          </div>
-        </div>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Deepgram STT Explorer</title>
+  <link rel="stylesheet" href="https://unpkg.com/@deepgram/styles/dist/deepgram.css">
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.2/css/all.min.css">
+  <script src="https://cdn.socket.io/4.6.0/socket.io.min.js"></script>
+  <script defer src="https://cdn.jsdelivr.net/npm/alpinejs@3.13.5/dist/cdn.min.js"></script>
+  <script src="/static/app.js"></script>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; }
 
-        <div class="url-display">
-          <code id="requestUrl">ws://localhost:8081/v1/listen?...</code>
-          <div class="url-buttons">
-            <button id="simplifyButton" class="copy-button">
-              <i class="fas fa-compress"></i>
-            </button>
-            <button id="copyUrl" class="copy-button">
-              <i class="fas fa-copy"></i>
-            </button>
-          </div>
-        </div>
+    html, body {
+      margin: 0; padding: 0;
+      height: 100%;
+      background: #0a0a0a;
+      color: #e5e7eb;
+      font-family: -apple-system, BlinkMacSystemFont, 'Inter', 'Segoe UI', sans-serif;
+      font-size: 14px;
+      overflow: hidden;
+    }
 
-        <div class="config-panel">
-          <div class="config-header" onclick="toggleConfig()">
-            <h3>Configuration</h3>
-            <i class="fas fa-chevron-down"></i>
-          </div>
-          <div id="configContent" class="config-content">
-            <form id="configForm">
-              <div class="import-section">
-                <input type="text" id="importInput" placeholder="Paste URL or JSON configuration">
-                <button type="button" id="importButton" class="import-button">
-                  <i class="fas fa-file-import"></i> Import
-                </button>
-              </div>
-              <div class="detect-settings-section">
-                <button type="button" id="detectSettingsButton" class="detect-settings-button">
-                  <i class="fas fa-microphone-alt"></i> Detect Audio Settings
-                </button>
-                <div class="microphone-select-container">
-                  <label for="microphone-select">Select Microphone:</label>
-                  <select id="microphone-select" class="microphone-select">
-                    <option value="">Default Microphone</option>
-                    <!-- Options will be populated by JavaScript -->
-                  </select>
-                  <button type="button" id="refreshMicrophoneList" class="refresh-button">
-                    <i class="fas fa-sync"></i>
-                  </button>
-                </div>
-                <div id="audioSettingsDisplay" class="audio-settings-display" style="display: none;">
-                  <h4>Audio Settings</h4>
-                  <div id="audioSettingsContent"></div>
-                </div>
-              </div>
-              <div class="config-columns">
-                <div class="config-group text-inputs">
-                  <label>Base URL:
-                    <input type="text" id="baseUrl" value="api.deepgram.com" placeholder="api.deepgram.com">
-                  </label>
-                  <label>Model:
-                    <input type="text" id="model" value="nova-3" placeholder="nova-3">
-                  </label>
-                  <label>Language:
-                    <input type="text" id="language" value="en" placeholder="en">
-                  </label>
-                  <label>Utterance End:
-                    <input type="text" id="utterance_end_ms" placeholder="1000">
-                  </label>
-                  <label>Endpointing:
-                    <input type="text" id="endpointing" placeholder="10">
-                  </label>
-                  <label>Encoding:
-                    <select id="encoding">
-                      <option value="">Select encoding...</option>
-                      <option value="linear16">linear16</option>
-                      <option value="linear32">linear32</option>
-                      <option value="flac">flac</option>
-                      <option value="alaw">alaw</option>
-                      <option value="mulaw">mulaw</option>
-                      <option value="amr-nb">amr-nb</option>
-                      <option value="amr-wb">amr-wb</option>
-                      <option value="opus">opus</option>
-                      <option value="ogg-opus">ogg-opus</option>
-                      <option value="speex">speex</option>
-                      <option value="g729">g729</option>
-                    </select>
-                  </label>
-                  <label>Channels:
-                    <input type="number" id="channels" placeholder="1">
-                  </label>
-                  <label>Sample Rate:
-                    <input type="number" id="sample_rate" placeholder="16000">
-                  </label>
-                  <label>Callback URL:
-                    <input type="text" id="callback" placeholder="">
-                  </label>
-                  <label>Keywords:
-                    <input type="text" id="keywords" placeholder="">
-                  </label>
-                  <label>Replace:
-                    <input type="text" id="replace" placeholder="">
-                  </label>
-                  <label>Search:
-                    <input type="text" id="search" placeholder="">
-                  </label>
-                  <label>Tags:
-                    <input type="text" id="tags" placeholder="">
-                  </label>
-                  <label>Version:
-                    <input type="text" id="version" placeholder="latest">
-                  </label>
-                </div>
-                <div class="config-group boolean-inputs">
-                  <label>
-                    <input type="checkbox" id="interim_results" checked> Interim Results
-                  </label>
-                  <label>
-                    <input type="checkbox" id="smart_format" checked> Smart Format
-                  </label>
-                  <label>
-                    <input type="checkbox" id="no_delay"> No Delay
-                  </label>
-                  <label>
-                    <input type="checkbox" id="dictation"> Dictation
-                  </label>
-                  <label>
-                    <input type="checkbox" id="numerals"> Numerals
-                  </label>
-                  <label>
-                    <input type="checkbox" id="profanity_filter"> Profanity Filter
-                  </label>
-                  <label>
-                    <input type="checkbox" id="punctuate"> Punctuate
-                  </label>
-                  <label>
-                    <input type="checkbox" id="multichannel"> Multichannel
-                  </label>
-                  <label>
-                    <input type="checkbox" id="mip_opt_out"> MIP Opt Out
-                  </label>
-                  <label>
-                    <input type="checkbox" id="vad_events"> VAD Events
-                  </label>
-                  <label>
-                    <input type="checkbox" id="diarize"> Diarize
-                  </label>
-                  <label>
-                    <input type="checkbox" id="filler_words"> Filler Words
-                  </label>
-                  <label>
-                    <input type="checkbox" id="paragraphs"> Paragraphs
-                  </label>
-                  <label>
-                    <input type="checkbox" id="utterances"> Utterances
-                  </label>
-                  <label>
-                    <input type="checkbox" id="detect_entities"> Detect Entities
-                  </label>
-                </div>
-              </div>
-              <div class="config-group dropdown-inputs">
-                <label>Redact:
-                  <select id="redact" multiple size="4">
-                    <option value="pci">PCI (Credit Card Info)</option>
-                    <option value="numbers">Numbers (3+ consecutive)</option>
-                    <option value="aggressive_numbers">Aggressive Numbers (All)</option>
-                    <option value="ssn">SSN (Social Security)</option>
-                  </select>
-                  <small>Hold Ctrl/Cmd to select multiple</small>
-                </label>
-              </div>
-              <div class="config-group">
-                <div class="extra-params-header" onclick="toggleExtraParams()">
-                  <h4>Extra Parameters (JSON)</h4>
-                  <i class="fas fa-chevron-down"></i>
-                </div>
-                <div id="extraParamsContent" class="extra-params-content collapsed">
-                  <textarea id="extraParams" placeholder='{"key": "value"}'></textarea>
-                </div>
-                <button type="button" id="resetButton" class="reset-button">
-                  <i class="fas fa-undo"></i> Reset to Defaults
-                </button>
-              </div>
-            </form>
-          </div>
-        </div>
-      </div>
+    /* ---- Layout ---- */
+    .app-layout {
+      display: flex;
+      height: 100vh;
+      overflow: hidden;
+    }
 
-      <div class="column right-column">
-        <div class="captions-container final-container">
-          <div id="finalCaptions"></div>
-        </div>
-        <div class="captions-container interim-container">
-          <div id="captions"></div>
-          <button id="clearButton" class="clear-button">
-            <i class="fas fa-trash"></i>
+    .left-panel {
+      width: 380px;
+      flex-shrink: 0;
+      height: 100vh;
+      border-right: 1px solid #1f2937;
+      overflow-y: auto;
+    }
+
+    .left-panel-inner {
+      padding: 12px;
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+    }
+
+    .left-panel-inner::-webkit-scrollbar { width: 5px; }
+    .left-panel-inner::-webkit-scrollbar-track { background: transparent; }
+    .left-panel-inner::-webkit-scrollbar-thumb { background: #374151; border-radius: 3px; }
+
+    .right-panel {
+      flex: 1;
+      min-width: 0;
+      display: flex;
+      flex-direction: column;
+      overflow: hidden;
+    }
+
+    /* ---- URL bar ---- */
+    .url-bar {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      padding: 8px 12px;
+      background: #0f172a;
+      border-bottom: 1px solid #1f2937;
+      flex-shrink: 0;
+    }
+
+    .url-scheme {
+      color: #6b7280;
+      font-family: monospace;
+      font-size: 12px;
+      white-space: nowrap;
+      flex-shrink: 0;
+    }
+
+    .url-input {
+      flex: 1;
+      background: #1a1f2e;
+      border: 1px solid #2d3748;
+      border-radius: 6px;
+      color: #13ef95;
+      font-family: monospace;
+      font-size: 12px;
+      padding: 6px 10px;
+      outline: none;
+      transition: border-color 0.2s;
+    }
+    .url-input:focus { border-color: #13ef95; }
+
+    .url-copy-btn {
+      background: #1a1f2e;
+      border: 1px solid #2d3748;
+      border-radius: 6px;
+      color: #9ca3af;
+      padding: 6px 10px;
+      cursor: pointer;
+      font-size: 12px;
+      white-space: nowrap;
+      transition: all 0.2s;
+    }
+    .url-copy-btn:hover { background: #2d3748; color: #e5e7eb; }
+    .url-copy-btn.copied { color: #13ef95; border-color: #13ef95; }
+
+    /* ---- Mode tabs ---- */
+    .mode-tabs {
+      display: flex;
+      background: #111827;
+      border: 1px solid #1f2937;
+      border-radius: 8px;
+      padding: 3px;
+      gap: 2px;
+    }
+
+    .mode-tab {
+      flex: 1;
+      padding: 7px 10px;
+      background: transparent;
+      border: none;
+      border-radius: 6px;
+      color: #6b7280;
+      font-size: 12px;
+      font-weight: 500;
+      cursor: pointer;
+      transition: all 0.2s;
+      text-align: center;
+    }
+    .mode-tab.active {
+      background: #1e293b;
+      color: #e5e7eb;
+    }
+    .mode-tab:hover:not(.active) { color: #9ca3af; }
+
+    /* ---- Input controls ---- */
+    .input-section {
+      background: #111827;
+      border: 1px solid #1f2937;
+      border-radius: 8px;
+      overflow: hidden;
+    }
+
+    .input-section-header {
+      padding: 10px 12px;
+      font-size: 11px;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
+      color: #6b7280;
+      border-bottom: 1px solid #1f2937;
+    }
+
+    .input-section-body { padding: 12px; }
+
+    .source-row {
+      display: flex;
+      gap: 8px;
+      align-items: center;
+      margin-bottom: 10px;
+    }
+
+    .source-input {
+      flex: 1;
+      background: #1a1f2e;
+      border: 1px solid #2d3748;
+      border-radius: 6px;
+      color: #e5e7eb;
+      font-family: monospace;
+      font-size: 12px;
+      padding: 6px 10px;
+      outline: none;
+      transition: border-color 0.2s;
+    }
+    .source-input:focus { border-color: #4b5563; }
+    .source-input::placeholder { color: #374151; }
+
+    .action-btn {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 6px;
+      padding: 7px 14px;
+      border: none;
+      border-radius: 6px;
+      font-size: 12px;
+      font-weight: 600;
+      cursor: pointer;
+      transition: all 0.2s;
+      white-space: nowrap;
+    }
+
+    .btn-primary {
+      background: #13ef95;
+      color: #0a0a0a;
+    }
+    .btn-primary:hover { background: #0fd484; }
+    .btn-primary:disabled { background: #1f2937; color: #6b7280; cursor: not-allowed; }
+
+    .btn-danger {
+      background: #ef4444;
+      color: #fff;
+    }
+    .btn-danger:hover { background: #dc2626; }
+
+    .btn-secondary {
+      background: #1e293b;
+      border: 1px solid #2d3748;
+      color: #9ca3af;
+    }
+    .btn-secondary:hover { background: #2d3748; color: #e5e7eb; }
+
+    .btn-sm { padding: 5px 10px; font-size: 11px; }
+
+    .upload-zone {
+      border: 2px dashed #2d3748;
+      border-radius: 8px;
+      padding: 16px;
+      text-align: center;
+      cursor: pointer;
+      transition: all 0.2s;
+      color: #6b7280;
+      font-size: 12px;
+    }
+    .upload-zone:hover, .upload-zone.drag-over {
+      border-color: #13ef95;
+      background: rgba(19, 239, 149, 0.05);
+      color: #13ef95;
+    }
+    .upload-zone i { font-size: 20px; display: block; margin-bottom: 6px; }
+
+    .uploaded-file {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      padding: 8px 10px;
+      background: #1a1f2e;
+      border: 1px solid #2d3748;
+      border-radius: 6px;
+      font-size: 12px;
+      color: #9ca3af;
+    }
+    .uploaded-file i { color: #13ef95; }
+    .uploaded-file .file-name { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+    .mic-btn {
+      width: 100%;
+      padding: 12px;
+      font-size: 14px;
+    }
+    .mic-btn.recording {
+      background: #ef4444;
+      color: #fff;
+      animation: pulse 1.5s infinite;
+    }
+    @keyframes pulse {
+      0%, 100% { box-shadow: 0 0 0 0 rgba(239,68,68,0.4); }
+      50% { box-shadow: 0 0 0 8px rgba(239,68,68,0); }
+    }
+
+    .status-dot {
+      display: inline-block;
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      margin-right: 4px;
+    }
+    .status-dot.connected { background: #13ef95; }
+    .status-dot.disconnected { background: #ef4444; }
+    .status-dot.streaming { background: #f59e0b; animation: blink 1s infinite; }
+    @keyframes blink { 0%, 100% { opacity: 1; } 50% { opacity: 0.3; } }
+
+    /* ---- Import/Export ---- */
+    .import-export-section {
+      background: #111827;
+      border: 1px solid #1f2937;
+      border-radius: 8px;
+      overflow: hidden;
+    }
+
+    .import-export-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 10px 12px;
+      cursor: pointer;
+      user-select: none;
+      border-bottom: 1px solid transparent;
+    }
+    .import-export-header.open { border-bottom-color: #1f2937; }
+
+    .import-export-title {
+      font-size: 11px;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
+      color: #6b7280;
+    }
+
+    .import-export-body {
+      padding: 12px;
+    }
+
+    .import-textarea {
+      width: 100%;
+      background: #1a1f2e;
+      border: 1px solid #2d3748;
+      border-radius: 6px;
+      color: #e5e7eb;
+      font-family: monospace;
+      font-size: 11px;
+      padding: 8px;
+      resize: vertical;
+      min-height: 60px;
+      outline: none;
+      transition: border-color 0.2s;
+    }
+    .import-textarea:focus { border-color: #4b5563; }
+    .import-textarea::placeholder { color: #374151; }
+
+    .import-export-btns {
+      display: flex;
+      gap: 6px;
+      margin-top: 8px;
+    }
+
+    /* ---- Collapsible param sections ---- */
+    .param-section {
+      background: #111827;
+      border: 1px solid #1f2937;
+      border-radius: 8px;
+      overflow: hidden;
+    }
+
+    .param-section-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 10px 12px;
+      cursor: pointer;
+      user-select: none;
+      transition: background 0.15s;
+    }
+    .param-section-header:hover { background: #1a2234; }
+
+    .param-section-title {
+      font-size: 12px;
+      font-weight: 600;
+      color: #9ca3af;
+      display: flex;
+      align-items: center;
+      gap: 6px;
+    }
+
+    .param-section-title i { color: #4b5563; font-size: 11px; width: 12px; }
+
+    .param-section-chevron {
+      color: #4b5563;
+      font-size: 10px;
+      transition: transform 0.2s;
+    }
+    .param-section-chevron.open { transform: rotate(180deg); }
+
+    .param-section-body {
+      padding: 12px;
+      border-top: 1px solid #1f2937;
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+    }
+
+    /* ---- Form fields ---- */
+    .field {
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+    }
+
+    .field-row {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 8px;
+    }
+
+    .field-label {
+      font-size: 11px;
+      font-weight: 500;
+      color: #6b7280;
+      text-transform: uppercase;
+      letter-spacing: 0.06em;
+    }
+
+    .field-input {
+      background: #1a1f2e;
+      border: 1px solid #2d3748;
+      border-radius: 6px;
+      color: #e5e7eb;
+      font-family: monospace;
+      font-size: 12px;
+      padding: 6px 8px;
+      outline: none;
+      width: 100%;
+      transition: border-color 0.2s;
+    }
+    .field-input:focus { border-color: #4b5563; }
+    .field-input::placeholder { color: #374151; }
+
+    .field-select {
+      background: #1a1f2e;
+      border: 1px solid #2d3748;
+      border-radius: 6px;
+      color: #e5e7eb;
+      font-size: 12px;
+      padding: 6px 8px;
+      outline: none;
+      width: 100%;
+      cursor: pointer;
+      transition: border-color 0.2s;
+      appearance: none;
+      background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 12 12'%3E%3Cpath fill='%236b7280' d='M6 8L1 3h10z'/%3E%3C/svg%3E");
+      background-repeat: no-repeat;
+      background-position: right 8px center;
+      padding-right: 24px;
+    }
+    .field-select:focus { border-color: #4b5563; }
+    .field-select option { background: #1a1f2e; }
+
+    /* Toggle switch */
+    .toggle-row {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 3px 0;
+    }
+
+    .toggle-label {
+      font-size: 12px;
+      color: #9ca3af;
+    }
+
+    .toggle-switch {
+      position: relative;
+      width: 32px;
+      height: 18px;
+      flex-shrink: 0;
+    }
+    .toggle-switch input { opacity: 0; width: 0; height: 0; }
+    .toggle-slider {
+      position: absolute;
+      cursor: pointer;
+      inset: 0;
+      background: #2d3748;
+      border-radius: 18px;
+      transition: background 0.2s;
+    }
+    .toggle-slider::before {
+      content: '';
+      position: absolute;
+      width: 12px;
+      height: 12px;
+      left: 3px;
+      top: 3px;
+      background: #6b7280;
+      border-radius: 50%;
+      transition: transform 0.2s, background 0.2s;
+    }
+    .toggle-switch input:checked + .toggle-slider { background: rgba(19, 239, 149, 0.3); }
+    .toggle-switch input:checked + .toggle-slider::before { transform: translateX(14px); background: #13ef95; }
+
+    /* Checkbox grid */
+    .checkbox-grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 6px;
+    }
+
+    .checkbox-item {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      cursor: pointer;
+    }
+
+    .checkbox-item input[type="checkbox"] {
+      width: 14px;
+      height: 14px;
+      accent-color: #13ef95;
+      cursor: pointer;
+      flex-shrink: 0;
+    }
+
+    .checkbox-item label {
+      font-size: 12px;
+      color: #9ca3af;
+      cursor: pointer;
+      user-select: none;
+    }
+
+    /* Keyterm list */
+    .keyterm-list {
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+    }
+
+    .keyterm-item {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+    }
+
+    .keyterm-item input {
+      flex: 1;
+    }
+
+    .keyterm-remove {
+      background: none;
+      border: none;
+      color: #ef4444;
+      cursor: pointer;
+      padding: 4px;
+      border-radius: 4px;
+      font-size: 12px;
+      opacity: 0.7;
+      transition: opacity 0.2s;
+    }
+    .keyterm-remove:hover { opacity: 1; }
+
+    .keyterm-add {
+      font-size: 11px;
+      padding: 5px 10px;
+      width: 100%;
+      margin-top: 4px;
+    }
+
+    /* ---- Right panel tabs ---- */
+    .right-tabs {
+      display: flex;
+      border-bottom: 1px solid #1f2937;
+      padding: 0 16px;
+      gap: 2px;
+      flex-shrink: 0;
+      background: #0d1117;
+    }
+
+    .right-tab {
+      padding: 10px 16px;
+      background: none;
+      border: none;
+      border-bottom: 2px solid transparent;
+      color: #6b7280;
+      font-size: 13px;
+      font-weight: 500;
+      cursor: pointer;
+      transition: all 0.2s;
+      margin-bottom: -1px;
+    }
+    .right-tab.active {
+      color: #13ef95;
+      border-bottom-color: #13ef95;
+    }
+    .right-tab:hover:not(.active) { color: #9ca3af; }
+
+    .right-tab-badge {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      width: 18px;
+      height: 18px;
+      background: #1f2937;
+      border-radius: 9px;
+      font-size: 10px;
+      margin-left: 6px;
+      color: #9ca3af;
+    }
+    .right-tab.active .right-tab-badge {
+      background: rgba(19, 239, 149, 0.15);
+      color: #13ef95;
+    }
+
+    /* ---- Transcript pane ---- */
+    .transcript-pane {
+      flex: 1;
+      display: flex;
+      flex-direction: column;
+      overflow: hidden;
+      padding: 16px;
+      gap: 12px;
+    }
+
+    .transcript-toolbar {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      flex-shrink: 0;
+    }
+
+    .transcript-final {
+      flex: 1;
+      overflow-y: auto;
+      font-size: 16px;
+      line-height: 1.7;
+      color: #13ef95;
+      padding: 12px;
+      background: rgba(19, 239, 149, 0.04);
+      border: 1px solid rgba(19, 239, 149, 0.12);
+      border-radius: 8px;
+    }
+    .transcript-final::-webkit-scrollbar { width: 4px; }
+    .transcript-final::-webkit-scrollbar-thumb { background: #2d3748; border-radius: 2px; }
+
+    .transcript-interim {
+      flex-shrink: 0;
+      min-height: 40px;
+      max-height: 80px;
+      overflow-y: auto;
+      font-size: 15px;
+      line-height: 1.6;
+      color: rgba(255,255,255,0.5);
+      font-style: italic;
+      padding: 8px 12px;
+      background: rgba(255,255,255,0.03);
+      border: 1px solid #1f2937;
+      border-radius: 6px;
+    }
+
+    .speaker-label {
+      font-size: 11px;
+      font-weight: 600;
+      color: #6b7280;
+      text-transform: uppercase;
+      letter-spacing: 0.06em;
+      margin-right: 6px;
+    }
+
+    /* ---- Response explorer ---- */
+    .responses-pane {
+      flex: 1;
+      display: flex;
+      flex-direction: column;
+      overflow: hidden;
+      padding: 16px;
+      gap: 10px;
+    }
+
+    .responses-toolbar {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      flex-shrink: 0;
+    }
+
+    .responses-list {
+      flex: 1;
+      overflow-y: auto;
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+    }
+    .responses-list::-webkit-scrollbar { width: 4px; }
+    .responses-list::-webkit-scrollbar-thumb { background: #2d3748; border-radius: 2px; }
+
+    .response-card {
+      background: #111827;
+      border: 1px solid #1f2937;
+      border-radius: 8px;
+      overflow: hidden;
+      flex-shrink: 0;
+    }
+
+    .response-card-header {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      padding: 8px 12px;
+      cursor: pointer;
+      transition: background 0.15s;
+    }
+    .response-card-header:hover { background: #1a2234; }
+
+    .response-type-badge {
+      font-size: 10px;
+      font-weight: 600;
+      padding: 2px 6px;
+      border-radius: 4px;
+      text-transform: uppercase;
+      letter-spacing: 0.06em;
+    }
+    .response-type-badge.interim { background: rgba(245,158,11,0.2); color: #f59e0b; }
+    .response-type-badge.final { background: rgba(19,239,149,0.2); color: #13ef95; }
+
+    .response-time {
+      font-size: 11px;
+      color: #4b5563;
+      font-family: monospace;
+    }
+
+    .response-preview {
+      flex: 1;
+      font-size: 11px;
+      color: #6b7280;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    .response-card-body {
+      border-top: 1px solid #1f2937;
+    }
+
+    /* JSON tree */
+    .json-tree {
+      padding: 10px 14px;
+      font-family: 'Courier New', monospace;
+      font-size: 11px;
+      line-height: 1.6;
+      overflow-x: auto;
+      max-height: 350px;
+      overflow-y: auto;
+    }
+    .json-tree::-webkit-scrollbar { width: 4px; height: 4px; }
+    .json-tree::-webkit-scrollbar-thumb { background: #2d3748; border-radius: 2px; }
+
+    .jt-line { display: flex; align-items: flex-start; gap: 2px; }
+    .jt-indent { display: inline-block; width: 16px; flex-shrink: 0; }
+    .jt-key { color: #9ca3af; }
+    .jt-colon { color: #4b5563; margin: 0 2px; }
+    .jt-str { color: #10b981; }
+    .jt-num { color: #f59e0b; }
+    .jt-bool { color: #8b5cf6; }
+    .jt-null { color: #ef4444; font-style: italic; }
+    .jt-brace { color: #6b7280; }
+    .jt-toggle { cursor: pointer; color: #47aca9; width: 14px; text-align: center; flex-shrink: 0; font-size: 9px; }
+    .jt-count { color: #4b5563; font-size: 10px; margin-left: 4px; }
+    .jt-block { margin-left: 16px; }
+    .jt-block.collapsed { display: none; }
+
+    /* ---- Empty state ---- */
+    .empty-state {
+      flex: 1;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      color: #374151;
+      gap: 10px;
+    }
+    .empty-state i { font-size: 32px; }
+    .empty-state p { font-size: 13px; margin: 0; }
+
+    /* ---- Toast ---- */
+    .toast {
+      position: fixed;
+      bottom: 20px;
+      right: 20px;
+      background: #1e293b;
+      border: 1px solid #2d3748;
+      border-radius: 8px;
+      padding: 10px 16px;
+      font-size: 13px;
+      color: #e5e7eb;
+      z-index: 1000;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      box-shadow: 0 4px 20px rgba(0,0,0,0.5);
+    }
+    .toast.success { border-color: #13ef95; color: #13ef95; }
+    .toast.error { border-color: #ef4444; color: #fca5a5; }
+
+    /* ---- Misc ---- */
+    .text-muted { color: #6b7280; }
+    .text-sm { font-size: 11px; }
+    .mt-2 { margin-top: 8px; }
+    .divider { height: 1px; background: #1f2937; margin: 4px 0; }
+
+    [x-cloak] { display: none !important; }
+
+    /* Streaming indicator */
+    .stream-indicator {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      font-size: 12px;
+      color: #6b7280;
+      padding: 0 12px;
+      border-bottom: 1px solid #1f2937;
+      height: 32px;
+      flex-shrink: 0;
+    }
+    .stream-indicator .url-live {
+      flex: 1;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+      font-family: monospace;
+      font-size: 11px;
+      color: #4b5563;
+    }
+
+    /* Detect settings button */
+    .detect-btn {
+      width: 100%;
+      font-size: 11px;
+    }
+
+    /* Array param pill list */
+    .pill-list {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 4px;
+      margin-top: 4px;
+    }
+    .pill {
+      display: flex;
+      align-items: center;
+      gap: 4px;
+      padding: 2px 8px;
+      background: #1a1f2e;
+      border: 1px solid #2d3748;
+      border-radius: 12px;
+      font-size: 11px;
+      color: #9ca3af;
+    }
+    .pill button {
+      background: none;
+      border: none;
+      color: #6b7280;
+      cursor: pointer;
+      padding: 0;
+      font-size: 10px;
+      line-height: 1;
+    }
+    .pill button:hover { color: #ef4444; }
+
+    /* Batch response area */
+    .batch-result {
+      flex: 1;
+      overflow-y: auto;
+      background: #111827;
+      border: 1px solid #1f2937;
+      border-radius: 8px;
+    }
+
+    /* ---- Interim debug panel ---- */
+    .debug-panel {
+      flex-shrink: 0;
+      background: #0d1117;
+      border: 1px solid #1f2937;
+      border-radius: 6px;
+      overflow: hidden;
+    }
+
+    .debug-panel-header {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      padding: 6px 10px;
+      cursor: pointer;
+      font-size: 11px;
+      color: #4b5563;
+      user-select: none;
+      transition: background 0.15s;
+    }
+    .debug-panel-header:hover { background: #111827; }
+    .debug-panel-header i.fa-chevron-down { margin-left: auto; transition: transform 0.2s; }
+    .debug-panel-header i.fa-chevron-down.open { transform: rotate(180deg); }
+
+    .debug-panel-body {
+      max-height: 180px;
+      overflow-y: auto;
+      padding: 4px 0;
+      border-top: 1px solid #1f2937;
+    }
+    .debug-panel-body::-webkit-scrollbar { width: 4px; }
+    .debug-panel-body::-webkit-scrollbar-thumb { background: #2d3748; border-radius: 2px; }
+
+    .debug-entry {
+      display: flex;
+      gap: 8px;
+      font-family: monospace;
+      font-size: 11px;
+      padding: 2px 10px;
+      line-height: 1.5;
+      border-bottom: 1px solid #0f1923;
+    }
+    .debug-entry:last-child { border-bottom: none; }
+    .debug-time { color: #4b5563; flex-shrink: 0; }
+    .debug-tag {
+      flex-shrink: 0;
+      font-size: 10px;
+      font-weight: 600;
+      padding: 0 4px;
+      border-radius: 3px;
+      align-self: center;
+    }
+    .debug-tag.interim { background: rgba(245,158,11,0.15); color: #f59e0b; }
+    .debug-tag.final   { background: rgba(19,239,149,0.15);  color: #13ef95; }
+    .debug-text.interim { color: rgba(245,158,11,0.8); }
+    .debug-text.final   { color: rgba(19,239,149,0.9); }
+
+    /* File streaming state badge */
+    .file-state {
+      font-size: 11px;
+      padding: 3px 8px;
+      border-radius: 4px;
+      font-weight: 500;
+    }
+    .file-state.idle { background: #1f2937; color: #6b7280; }
+    .file-state.streaming { background: rgba(245,158,11,0.15); color: #f59e0b; }
+    .file-state.done { background: rgba(19,239,149,0.15); color: #13ef95; }
+    .file-state.error { background: rgba(239,68,68,0.15); color: #fca5a5; }
+  </style>
+</head>
+<body x-data="appData()" x-init="init()">
+
+  <!-- Toast notification -->
+  <div x-cloak x-show="toast.visible"
+    x-transition:enter="transition ease-out duration-200"
+    x-transition:enter-start="opacity-0 translate-y-2"
+    x-transition:enter-end="opacity-100 translate-y-0"
+    x-transition:leave="transition ease-in duration-150"
+    x-transition:leave-start="opacity-100"
+    x-transition:leave-end="opacity-0"
+    :class="'toast ' + toast.type">
+    <i :class="toast.type === 'success' ? 'fas fa-check-circle' : 'fas fa-exclamation-circle'"></i>
+    <span x-text="toast.message"></span>
+  </div>
+
+  <div class="app-layout">
+
+    <!-- ======= LEFT PANEL ======= -->
+    <div class="left-panel">
+      <div class="left-panel-inner">
+
+        <!-- Mode tabs -->
+        <div class="mode-tabs">
+          <button class="mode-tab" :class="mode==='mic' && 'active'" @click="setMode('mic')">
+            <i class="fas fa-microphone"></i> Microphone
+          </button>
+          <button class="mode-tab" :class="mode==='file' && 'active'" @click="setMode('file')">
+            <i class="fas fa-file-audio"></i> File Stream
+          </button>
+          <button class="mode-tab" :class="mode==='batch' && 'active'" @click="setMode('batch')">
+            <i class="fas fa-layer-group"></i> Batch
           </button>
         </div>
-        
-        <!-- Streaming Responses Container -->
-        <div class="streaming-responses-container">
-          <div class="streaming-responses-header">
-            <h3><i class="fas fa-stream"></i> Live Streaming Responses</h3>
-            <button id="clearResponsesButton" class="clear-responses-button" onclick="document.getElementById('streaming-responses').innerHTML = ''">
-              <i class="fas fa-trash"></i>
+
+        <!-- Input controls section -->
+        <div class="input-section">
+          <div class="input-section-header" style="display:flex;align-items:center;justify-content:space-between;">
+            <span>Input</span>
+            <span>
+              <span class="status-dot" :class="connected ? 'connected' : 'disconnected'"></span>
+              <span class="text-sm text-muted" x-text="connected ? 'Connected' : 'Disconnected'"></span>
+            </span>
+          </div>
+          <div class="input-section-body">
+
+            <!-- Microphone mode -->
+            <template x-if="mode === 'mic'">
+              <div>
+                <button class="action-btn mic-btn"
+                  :class="recording ? 'btn-danger recording' : 'btn-primary'"
+                  @click="recording ? stopMic() : startMic()">
+                  <i :class="recording ? 'fas fa-stop' : 'fas fa-microphone'"></i>
+                  <span x-text="recording ? 'Stop Recording' : 'Start Recording'"></span>
+                </button>
+                <div class="mt-2">
+                  <button class="action-btn btn-secondary detect-btn" @click="detectAudioSettings()">
+                    <i class="fas fa-sliders-h"></i> Detect Audio Settings
+                  </button>
+                </div>
+              </div>
+            </template>
+
+            <!-- File streaming mode -->
+            <template x-if="mode === 'file'">
+              <div>
+                <template x-if="!uploadedFile">
+                  <div class="upload-zone"
+                    @click="$refs.fileInput.click()"
+                    @dragover.prevent="$event.currentTarget.classList.add('drag-over')"
+                    @dragleave="$event.currentTarget.classList.remove('drag-over')"
+                    @drop.prevent="handleFileDrop($event)">
+                    <i class="fas fa-cloud-upload-alt"></i>
+                    Click or drag an audio file here
+                  </div>
+                </template>
+                <template x-if="uploadedFile">
+                  <div>
+                    <div class="uploaded-file">
+                      <i class="fas fa-file-audio"></i>
+                      <span class="file-name" x-text="uploadedFile.name"></span>
+                      <span :class="'file-state ' + fileStreamState" x-text="fileStreamState"></span>
+                      <button class="action-btn btn-secondary btn-sm" @click="uploadedFile = null; fileStreamState = 'idle'">
+                        <i class="fas fa-times"></i>
+                      </button>
+                    </div>
+                    <div style="display:flex;gap:6px;margin-top:8px;">
+                      <button class="action-btn btn-primary" style="flex:1;"
+                        :disabled="fileStreamState === 'streaming'"
+                        @click="startFileStream()">
+                        <i class="fas fa-play"></i> Stream
+                      </button>
+                      <button class="action-btn btn-danger btn-sm"
+                        x-show="fileStreamState === 'streaming'"
+                        @click="stopFileStream()">
+                        <i class="fas fa-stop"></i>
+                      </button>
+                    </div>
+                  </div>
+                </template>
+                <input type="file" x-ref="fileInput" accept="audio/*,video/*" style="display:none"
+                  @change="handleFileSelect($event)">
+              </div>
+            </template>
+
+            <!-- Batch mode -->
+            <template x-if="mode === 'batch'">
+              <div style="display:flex;flex-direction:column;gap:8px;">
+                <div class="field">
+                  <div class="field-label">URL or uploaded file</div>
+                  <div class="source-row">
+                    <input class="source-input field-input"
+                      x-model="batchSource"
+                      placeholder="https://... or upload a file">
+                    <button class="action-btn btn-secondary btn-sm" @click="$refs.batchFileInput.click()">
+                      <i class="fas fa-upload"></i>
+                    </button>
+                  </div>
+                  <input type="file" x-ref="batchFileInput" accept="audio/*,video/*" style="display:none"
+                    @change="handleBatchFileSelect($event)">
+                </div>
+                <button class="action-btn btn-primary"
+                  :disabled="batchLoading || !batchSource"
+                  @click="runBatch()">
+                  <i :class="batchLoading ? 'fas fa-spinner fa-spin' : 'fas fa-bolt'"></i>
+                  <span x-text="batchLoading ? 'Transcribing...' : 'Transcribe'"></span>
+                </button>
+              </div>
+            </template>
+
+          </div>
+        </div>
+
+        <!-- Import / Export -->
+        <div class="import-export-section">
+          <div class="import-export-header"
+            :class="importExportOpen && 'open'"
+            @click="importExportOpen = !importExportOpen">
+            <span class="import-export-title"><i class="fas fa-exchange-alt" style="margin-right:6px;"></i>Import / Export</span>
+            <i class="fas fa-chevron-down param-section-chevron" :class="importExportOpen && 'open'"></i>
+          </div>
+          <div x-show="importExportOpen" x-cloak class="import-export-body">
+            <textarea class="import-textarea" x-model="importExportText"
+              placeholder="Paste a wss://... URL or JSON params object to import, or export below"></textarea>
+            <div class="import-export-btns">
+              <button class="action-btn btn-secondary btn-sm" style="flex:1;" @click="importConfig()">
+                <i class="fas fa-file-import"></i> Import
+              </button>
+              <button class="action-btn btn-secondary btn-sm" style="flex:1;" @click="exportConfig()">
+                <i class="fas fa-file-export"></i> Export JSON
+              </button>
+              <button class="action-btn btn-secondary btn-sm" style="flex:1;" @click="resetParams()">
+                <i class="fas fa-undo"></i> Reset
+              </button>
+            </div>
+          </div>
+        </div>
+
+        <!-- PARAM SECTION: Core -->
+        <div class="param-section">
+          <div class="param-section-header" @click="sections.core = !sections.core">
+            <div class="param-section-title">
+              <i class="fas fa-cog"></i> Core
+            </div>
+            <i class="fas fa-chevron-down param-section-chevron" :class="sections.core && 'open'"></i>
+          </div>
+          <div x-show="sections.core" class="param-section-body">
+            <div class="field-row">
+              <div class="field">
+                <div class="field-label">Model</div>
+                <input class="field-input" x-model="params.model" placeholder="nova-3">
+              </div>
+              <div class="field">
+                <div class="field-label">Language</div>
+                <input class="field-input" x-model="params.language" placeholder="en">
+              </div>
+            </div>
+            <div class="field">
+              <div class="field-label">Base URL</div>
+              <input class="field-input" x-model="params.base_url" placeholder="api.deepgram.com">
+            </div>
+          </div>
+        </div>
+
+        <!-- PARAM SECTION: Audio -->
+        <div class="param-section">
+          <div class="param-section-header" @click="sections.audio = !sections.audio">
+            <div class="param-section-title">
+              <i class="fas fa-wave-square"></i> Audio
+            </div>
+            <i class="fas fa-chevron-down param-section-chevron" :class="sections.audio && 'open'"></i>
+          </div>
+          <div x-show="sections.audio" class="param-section-body">
+            <div class="field-row">
+              <div class="field">
+                <div class="field-label">Sample Rate</div>
+                <input class="field-input" type="number" x-model.number="params.sample_rate" placeholder="16000">
+              </div>
+              <div class="field">
+                <div class="field-label">Channels</div>
+                <input class="field-input" type="number" min="1" x-model.number="params.channels" placeholder="1">
+              </div>
+            </div>
+            <div class="field">
+              <div class="field-label">Encoding</div>
+              <select class="field-select" x-model="params.encoding">
+                <option value="">Auto-detect</option>
+                <option value="linear16">linear16</option>
+                <option value="linear32">linear32</option>
+                <option value="mulaw">mulaw</option>
+                <option value="alaw">alaw</option>
+                <option value="flac">flac</option>
+                <option value="opus">opus</option>
+                <option value="ogg-opus">ogg-opus</option>
+                <option value="amr-nb">amr-nb</option>
+                <option value="amr-wb">amr-wb</option>
+                <option value="speex">speex</option>
+                <option value="g729">g729</option>
+              </select>
+            </div>
+            <div class="toggle-row">
+              <span class="toggle-label">Multichannel</span>
+              <label class="toggle-switch">
+                <input type="checkbox" x-model="params.multichannel">
+                <span class="toggle-slider"></span>
+              </label>
+            </div>
+          </div>
+        </div>
+
+        <!-- PARAM SECTION: Formatting -->
+        <div class="param-section">
+          <div class="param-section-header" @click="sections.formatting = !sections.formatting">
+            <div class="param-section-title">
+              <i class="fas fa-align-left"></i> Formatting
+            </div>
+            <i class="fas fa-chevron-down param-section-chevron" :class="sections.formatting && 'open'"></i>
+          </div>
+          <div x-show="sections.formatting" class="param-section-body">
+            <div class="checkbox-grid">
+              <div class="checkbox-item">
+                <input type="checkbox" id="smart_format" x-model="params.smart_format">
+                <label for="smart_format">Smart Format</label>
+              </div>
+              <div class="checkbox-item">
+                <input type="checkbox" id="punctuate" x-model="params.punctuate">
+                <label for="punctuate">Punctuate</label>
+              </div>
+              <div class="checkbox-item">
+                <input type="checkbox" id="numerals" x-model="params.numerals">
+                <label for="numerals">Numerals</label>
+              </div>
+              <div class="checkbox-item">
+                <input type="checkbox" id="filler_words" x-model="params.filler_words">
+                <label for="filler_words">Filler Words</label>
+              </div>
+              <div class="checkbox-item">
+                <input type="checkbox" id="dictation" x-model="params.dictation">
+                <label for="dictation">Dictation</label>
+              </div>
+              <div class="checkbox-item">
+                <input type="checkbox" id="profanity_filter" x-model="params.profanity_filter">
+                <label for="profanity_filter">Profanity Filter</label>
+              </div>
+              <div class="checkbox-item">
+                <input type="checkbox" id="word_confidence" x-model="params.word_confidence">
+                <label for="word_confidence">Word Confidence</label>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- PARAM SECTION: Features -->
+        <div class="param-section">
+          <div class="param-section-header" @click="sections.features = !sections.features">
+            <div class="param-section-title">
+              <i class="fas fa-star"></i> Features
+            </div>
+            <i class="fas fa-chevron-down param-section-chevron" :class="sections.features && 'open'"></i>
+          </div>
+          <div x-show="sections.features" class="param-section-body">
+            <div class="checkbox-grid">
+              <div class="checkbox-item">
+                <input type="checkbox" id="diarize" x-model="params.diarize">
+                <label for="diarize">Diarize</label>
+              </div>
+              <div class="checkbox-item">
+                <input type="checkbox" id="detect_entities" x-model="params.detect_entities">
+                <label for="detect_entities">Detect Entities</label>
+              </div>
+              <div class="checkbox-item">
+                <input type="checkbox" id="utterances" x-model="params.utterances">
+                <label for="utterances">Utterances</label>
+              </div>
+              <div class="checkbox-item">
+                <input type="checkbox" id="paragraphs" x-model="params.paragraphs">
+                <label for="paragraphs">Paragraphs</label>
+              </div>
+            </div>
+
+            <!-- Diarize version -->
+            <template x-if="params.diarize">
+              <div class="field mt-2">
+                <div class="field-label">Diarize Version</div>
+                <select class="field-select" x-model="params.diarize_version">
+                  <option value="">Default</option>
+                  <option value="2021-07-14.0">2021-07-14.0</option>
+                  <option value="latest">latest</option>
+                </select>
+              </div>
+            </template>
+
+            <!-- Entity types when detect_entities enabled -->
+            <template x-if="params.detect_entities">
+              <div class="mt-2">
+                <div class="field-label" style="margin-bottom:6px;">Entity Prompt</div>
+                <input class="field-input" x-model="params.entity_prompt" placeholder="custom entity prompt...">
+              </div>
+            </template>
+
+            <div class="field mt-2">
+              <div class="field-label">Search</div>
+              <input class="field-input" x-model="params.search" placeholder="word1,word2">
+            </div>
+            <div class="field">
+              <div class="field-label">Replace</div>
+              <input class="field-input" x-model="params.replace" placeholder="original:replacement">
+            </div>
+            <div class="field">
+              <div class="field-label">Keywords</div>
+              <input class="field-input" x-model="params.keywords" placeholder="word1:2,word2">
+            </div>
+          </div>
+        </div>
+
+        <!-- PARAM SECTION: Redaction -->
+        <div class="param-section">
+          <div class="param-section-header" @click="sections.redaction = !sections.redaction">
+            <div class="param-section-title">
+              <i class="fas fa-user-shield"></i> Redaction
+            </div>
+            <i class="fas fa-chevron-down param-section-chevron" :class="sections.redaction && 'open'"></i>
+          </div>
+          <div x-show="sections.redaction" class="param-section-body">
+            <div class="field-label" style="margin-bottom:8px;">Redact (select all that apply)</div>
+            <div class="checkbox-grid">
+              <template x-for="opt in redactOptions" :key="opt.value">
+                <div class="checkbox-item">
+                  <input type="checkbox" :id="'redact_' + opt.value"
+                    :checked="params.redact.includes(opt.value)"
+                    @change="toggleRedact(opt.value, $event.target.checked)">
+                  <label :for="'redact_' + opt.value" x-text="opt.label"></label>
+                </div>
+              </template>
+            </div>
+          </div>
+        </div>
+
+        <!-- PARAM SECTION: Prompting -->
+        <div class="param-section">
+          <div class="param-section-header" @click="sections.prompting = !sections.prompting">
+            <div class="param-section-title">
+              <i class="fas fa-key"></i> Prompting
+            </div>
+            <i class="fas fa-chevron-down param-section-chevron" :class="sections.prompting && 'open'"></i>
+          </div>
+          <div x-show="sections.prompting" class="param-section-body">
+            <div class="field-label" style="margin-bottom:6px;">Keyterms</div>
+            <div class="keyterm-list">
+              <template x-for="(term, i) in params.keyterms" :key="i">
+                <div class="keyterm-item">
+                  <input class="field-input" :value="term"
+                    @input="params.keyterms[i] = $event.target.value"
+                    placeholder="term or term:boost">
+                  <button class="keyterm-remove" @click="params.keyterms.splice(i, 1)">
+                    <i class="fas fa-times"></i>
+                  </button>
+                </div>
+              </template>
+            </div>
+            <button class="action-btn btn-secondary keyterm-add" @click="params.keyterms.push('')">
+              <i class="fas fa-plus"></i> Add Keyterm
             </button>
           </div>
-          <div id="streaming-responses" class="streaming-responses-content"></div>
         </div>
+
+        <!-- PARAM SECTION: Intelligence (batch only) -->
+        <div class="param-section" x-show="mode === 'batch'">
+          <div class="param-section-header" @click="sections.intelligence = !sections.intelligence">
+            <div class="param-section-title">
+              <i class="fas fa-brain"></i> Intelligence <span class="text-muted text-sm" style="font-weight:400;">(batch only)</span>
+            </div>
+            <i class="fas fa-chevron-down param-section-chevron" :class="sections.intelligence && 'open'"></i>
+          </div>
+          <div x-show="sections.intelligence" class="param-section-body">
+            <div class="checkbox-grid">
+              <div class="checkbox-item">
+                <input type="checkbox" id="topics" x-model="params.topics">
+                <label for="topics">Topics</label>
+              </div>
+              <div class="checkbox-item">
+                <input type="checkbox" id="intents" x-model="params.intents">
+                <label for="intents">Intents</label>
+              </div>
+              <div class="checkbox-item">
+                <input type="checkbox" id="sentiment" x-model="params.sentiment">
+                <label for="sentiment">Sentiment</label>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- PARAM SECTION: Streaming (streaming only) -->
+        <div class="param-section" x-show="mode !== 'batch'">
+          <div class="param-section-header" @click="sections.streaming = !sections.streaming">
+            <div class="param-section-title">
+              <i class="fas fa-broadcast-tower"></i> Streaming <span class="text-muted text-sm" style="font-weight:400;">(live only)</span>
+            </div>
+            <i class="fas fa-chevron-down param-section-chevron" :class="sections.streaming && 'open'"></i>
+          </div>
+          <div x-show="sections.streaming" class="param-section-body">
+            <div class="field-row">
+              <div class="field">
+                <div class="field-label">Endpointing (ms)</div>
+                <input class="field-input" type="number" x-model.number="params.endpointing" placeholder="10">
+              </div>
+              <div class="field">
+                <div class="field-label">Utterance End (ms)</div>
+                <input class="field-input" type="number" x-model.number="params.utterance_end_ms" placeholder="1000">
+              </div>
+            </div>
+            <div class="toggle-row">
+              <span class="toggle-label">Interim Results</span>
+              <label class="toggle-switch">
+                <input type="checkbox" x-model="params.interim_results">
+                <span class="toggle-slider"></span>
+              </label>
+            </div>
+            <div class="toggle-row">
+              <span class="toggle-label">VAD Events</span>
+              <label class="toggle-switch">
+                <input type="checkbox" x-model="params.vad_events">
+                <span class="toggle-slider"></span>
+              </label>
+            </div>
+            <div class="toggle-row">
+              <span class="toggle-label">No Delay</span>
+              <label class="toggle-switch">
+                <input type="checkbox" x-model="params.no_delay">
+                <span class="toggle-slider"></span>
+              </label>
+            </div>
+          </div>
+        </div>
+
+        <!-- PARAM SECTION: Advanced -->
+        <div class="param-section">
+          <div class="param-section-header" @click="sections.advanced = !sections.advanced">
+            <div class="param-section-title">
+              <i class="fas fa-code"></i> Advanced
+            </div>
+            <i class="fas fa-chevron-down param-section-chevron" :class="sections.advanced && 'open'"></i>
+          </div>
+          <div x-show="sections.advanced" class="param-section-body">
+            <div class="field-row">
+              <div class="field">
+                <div class="field-label">Version</div>
+                <input class="field-input" x-model="params.version" placeholder="latest">
+              </div>
+              <div class="field">
+                <div class="field-label">Alternatives</div>
+                <input class="field-input" type="number" min="0" x-model.number="params.alternatives" placeholder="0">
+              </div>
+            </div>
+            <div class="field">
+              <div class="field-label">Callback URL</div>
+              <input class="field-input" x-model="params.callback" placeholder="https://...">
+            </div>
+            <div class="field">
+              <div class="field-label">Tags (comma-separated)</div>
+              <input class="field-input" x-model="params.tags" placeholder="tag1,tag2">
+            </div>
+            <div class="toggle-row">
+              <span class="toggle-label">MIP Opt-Out</span>
+              <label class="toggle-switch">
+                <input type="checkbox" x-model="params.mip_opt_out">
+                <span class="toggle-slider"></span>
+              </label>
+            </div>
+            <div class="divider"></div>
+            <div class="field-label" style="margin-bottom:4px;">Extra JSON params</div>
+            <textarea class="import-textarea" x-model="params.extra_json"
+              placeholder='{"custom_key": "value"}'
+              style="min-height:70px;"></textarea>
+          </div>
+        </div>
+
+        <!-- Bottom spacer -->
+        <div style="height:8px;flex-shrink:0;"></div>
+
       </div>
     </div>
-  </body>
+    <!-- END LEFT PANEL -->
+
+    <!-- ======= RIGHT PANEL ======= -->
+    <div class="right-panel">
+
+      <!-- Editable URL bar -->
+      <div class="url-bar">
+        <span class="url-scheme" x-text="mode === 'batch' ? 'https://' : 'wss://'"></span>
+        <input class="url-input" type="text"
+          x-model="urlDisplay"
+          @focus="urlFocused = true"
+          @blur="urlFocused = false; parseUrlInput()"
+          @keydown.enter="parseUrlInput(); $event.target.blur()"
+          spellcheck="false">
+        <button class="url-copy-btn" :class="urlCopied && 'copied'" @click="copyUrl()">
+          <i :class="urlCopied ? 'fas fa-check' : 'fas fa-copy'"></i>
+          <span x-text="urlCopied ? 'Copied' : 'Copy'"></span>
+        </button>
+      </div>
+
+      <!-- Stream status bar -->
+      <div class="stream-indicator" x-show="streamUrl">
+        <span class="status-dot streaming"></span>
+        <span class="url-live" x-text="streamUrl"></span>
+      </div>
+
+      <!-- Right panel tabs -->
+      <div class="right-tabs">
+        <button class="right-tab" :class="rightTab === 'transcript' && 'active'" @click="rightTab = 'transcript'">
+          Transcript
+        </button>
+        <button class="right-tab" :class="rightTab === 'responses' && 'active'" @click="rightTab = 'responses'">
+          API Responses
+          <span class="right-tab-badge" x-text="responses.length"></span>
+        </button>
+        <button class="right-tab" :class="rightTab === 'batch' && 'active'" @click="rightTab = 'batch'" x-show="mode === 'batch'">
+          Batch Result
+        </button>
+      </div>
+
+      <!-- Transcript tab -->
+      <template x-if="rightTab === 'transcript'">
+        <div class="transcript-pane">
+          <div class="transcript-toolbar">
+            <span class="text-muted text-sm">
+              <i class="fas fa-microphone-alt"></i>
+              <span x-text="mode === 'batch' ? 'Streaming transcript' : 'Live transcript'"></span>
+            </span>
+            <button class="action-btn btn-secondary btn-sm" @click="clearTranscript()">
+              <i class="fas fa-trash"></i> Clear
+            </button>
+          </div>
+          <div class="transcript-final" x-ref="transcriptFinal">
+            <template x-if="finalTranscript === '' && interimTranscript === ''">
+              <div class="empty-state" style="height:100%;">
+                <i class="fas fa-microphone-slash"></i>
+                <p>No transcript yet. Start recording or stream a file.</p>
+              </div>
+            </template>
+            <div x-html="finalTranscript"></div>
+          </div>
+          <div class="transcript-interim" x-show="interimTranscript">
+            <span x-text="interimTranscript"></span>
+          </div>
+          <!-- Interim debug log -->
+          <div class="debug-panel" x-show="interimLog.length > 0 || debugPanelOpen">
+            <div class="debug-panel-header" @click="debugPanelOpen = !debugPanelOpen">
+              <i class="fas fa-bug"></i>
+              <span>Interim Log</span>
+              <span class="right-tab-badge" x-text="interimLog.length"></span>
+              <i class="fas fa-chevron-down" :class="debugPanelOpen && 'open'"></i>
+            </div>
+            <div x-show="debugPanelOpen" x-cloak x-ref="debugLog" class="debug-panel-body">
+              <template x-for="(entry, i) in interimLog" :key="i">
+                <div class="debug-entry">
+                  <span class="debug-time" x-text="entry.time"></span>
+                  <span class="debug-tag" :class="entry.type" x-text="entry.type"></span>
+                  <span class="debug-text" :class="entry.type" x-text="entry.text"></span>
+                </div>
+              </template>
+            </div>
+          </div>
+        </div>
+      </template>
+
+      <!-- Responses tab -->
+      <template x-if="rightTab === 'responses'">
+        <div class="responses-pane">
+          <div class="responses-toolbar">
+            <span class="text-muted text-sm">
+              <span x-text="responses.length"></span> responses
+            </span>
+            <button class="action-btn btn-secondary btn-sm" @click="responses = []">
+              <i class="fas fa-trash"></i> Clear
+            </button>
+          </div>
+          <div class="responses-list" x-ref="responsesList">
+            <template x-if="responses.length === 0">
+              <div class="empty-state">
+                <i class="fas fa-inbox"></i>
+                <p>No API responses yet.</p>
+              </div>
+            </template>
+            <template x-for="(resp, i) in responses" :key="i">
+              <div class="response-card">
+                <div class="response-card-header" @click="resp.open = !resp.open">
+                  <span class="response-type-badge" :class="resp.type" x-text="resp.type"></span>
+                  <span class="response-time" x-text="resp.timestamp"></span>
+                  <span class="response-preview" x-text="resp.preview"></span>
+                  <i class="fas fa-chevron-down text-muted" :style="resp.open ? 'transform:rotate(180deg);transition:0.2s' : 'transition:0.2s'"></i>
+                </div>
+                <div class="response-card-body" x-show="resp.open">
+                  <div class="json-tree" x-html="renderJsonTree(resp.data)"></div>
+                </div>
+              </div>
+            </template>
+          </div>
+        </div>
+      </template>
+
+      <!-- Batch result tab -->
+      <template x-if="rightTab === 'batch'">
+        <div class="responses-pane">
+          <div class="responses-toolbar">
+            <span class="text-muted text-sm">Batch API response</span>
+            <button class="action-btn btn-secondary btn-sm" @click="batchResult = null">
+              <i class="fas fa-trash"></i> Clear
+            </button>
+          </div>
+          <template x-if="!batchResult">
+            <div class="empty-state" style="flex:1;">
+              <i class="fas fa-layer-group"></i>
+              <p>Submit a batch transcription request to see the result.</p>
+            </div>
+          </template>
+          <template x-if="batchResult">
+            <div class="batch-result">
+              <div class="json-tree" x-html="renderJsonTree(batchResult)"></div>
+            </div>
+          </template>
+        </div>
+      </template>
+
+    </div>
+    <!-- END RIGHT PANEL -->
+
+  </div>
+
+</body>
 </html>
