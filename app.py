@@ -184,7 +184,7 @@ async def disconnect(sid, reason=None):
 @sio.on("toggle_transcription")
 async def on_toggle_transcription(sid, data):
     action = data.get("action", "start")
-    params = data.get("params", {})
+    params = data.get("params", data.get("config", {}))
     logger.info("[%s] toggle_transcription action=%s", sid, action)
 
     if action == "start":

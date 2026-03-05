@@ -1151,7 +1151,7 @@ async function openMicrophone(microphone, socket) {
         socket.emit("audio_stream", event.data);
       }
     };
-    microphone.start(1000);
+    microphone.start(250);
   });
 }
 
