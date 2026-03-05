@@ -29,7 +29,7 @@
 
 ### Testing
 
-- [ ] **TEST-01**: Test suite uses `UvicornTestServer` + `socketio.AsyncClient` fixtures (replaces Flask-SocketIO test client)
+- [x] **TEST-01**: Test suite uses `UvicornTestServer` + `socketio.AsyncClient` fixtures (replaces Flask-SocketIO test client)
 - [ ] **TEST-02**: All existing test scenarios covered and passing on the new async stack
 
 ### Deployment
@@ -63,7 +63,7 @@
 | STACK-02 | Phase 1 | Complete |
 | TRANS-01 | Phase 1 | Complete |
 | TRANS-02 | Phase 1 | Complete |
-| TEST-01 | Phase 2 | Pending |
+| TEST-01 | Phase 2 | Complete |
 | TEST-02 | Phase 5 | Pending |
 | STR-01 | Phase 3 | Pending |
 | STR-02 | Phase 3 | Pending |
