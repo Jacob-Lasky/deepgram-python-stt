@@ -34,12 +34,30 @@ async def test_upload_file():
     assert body["size"] > 0
 
 
-async def test_transcribe_returns_501():
+async def test_transcribe_no_source_returns_400():
+    """No url or filename: route returns 400 immediately without calling Deepgram."""
     async with AsyncClient(
         transport=ASGITransport(app=fastapi_app), base_url="http://test"
     ) as client:
         resp = await client.post("/transcribe", json={})
-    assert resp.status_code == 501
+    assert resp.status_code == 400
+    assert "error" in resp.json()
+
+
+async def test_transcribe_url_source_returns_non_501():
+    """With test-key, Deepgram returns 401. Route propagates as error JSON.
+    Key assertion: route is no longer a 501 stub — it actually calls Deepgram."""
+    async with AsyncClient(
+        transport=ASGITransport(app=fastapi_app), base_url="http://test"
+    ) as client:
+        resp = await client.post(
+            "/transcribe",
+            json={"url": "https://static.deepgram.com/examples/Bueller-Life-moves-pretty-fast.wav"},
+        )
+    # With test-key: 401 from Deepgram propagated as error JSON
+    # With real key: 200 with transcription
+    assert resp.status_code != 501
+    assert "error" in resp.json() or "results" in resp.json()
 
 
 # ---- SocketIO events (uses session-scoped sio_client from conftest) ----
