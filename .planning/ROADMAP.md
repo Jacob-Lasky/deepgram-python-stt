@@ -72,7 +72,11 @@ Plans:
   1. Uploading an audio file produces `transcription_update` events for all content, including the final words at end-of-file
   2. The `/transcribe` batch route returns a transcription result using httpx (no `requests` import remains)
   3. File streaming reuses `streaming_task()` from Phase 3 — no separate WebSocket management code exists for file uploads
-**Plans**: TBD
+**Plans**: 2 plans
+
+Plans:
+- [ ] 04-01-PLAN.md — Implement file_streaming_task() + replace start/stop_file_streaming stubs + add file streaming SocketIO tests
+- [ ] 04-02-PLAN.md — Replace /transcribe 501 stub with httpx.AsyncClient batch implementation + update tests
 
 ### Phase 5: Test Coverage + Deployment
 **Goal**: All async event handlers have test coverage, the Dockerfile launches uvicorn, and the app is verified running on Fly.io
@@ -93,5 +97,5 @@ Plans:
 | 1. Eliminate gevent + ASGI Skeleton | 2/2 | Complete   | 2026-03-05 | - |
 | 2. Async Test Infrastructure | 1/1 | Complete   | 2026-03-05 | - |
 | 3. Deepgram SDK Streaming | 2/2 | Complete   | 2026-03-05 | - |
-| 4. File Streaming + Batch | v2.0 | 0/TBD | Not started | - |
+| 4. File Streaming + Batch | v2.0 | 0/2 | Not started | - |
 | 5. Test Coverage + Deployment | v2.0 | 0/TBD | Not started | - |
