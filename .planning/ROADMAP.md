@@ -86,7 +86,11 @@ Plans:
   1. `pytest` passes with coverage across all SocketIO event handlers (`toggle_transcription`, `audio_stream`, file upload, batch transcription)
   2. Dockerfile CMD runs `uvicorn` (not gunicorn); `docker build` succeeds without error
   3. The deployed app at deepgram-python-stt.fly.dev accepts SocketIO connections and returns live transcriptions
-**Plans**: TBD
+**Plans**: 2 plans
+
+Plans:
+- [ ] 05-01-PLAN.md — Add detect_audio_settings and audio_stream tests to test_app.py (closes TEST-02 coverage gaps)
+- [ ] 05-02-PLAN.md — Verify Dockerfile CMD + install flyctl + deploy to Fly.io + human verify live transcription
 
 ## Progress
 
@@ -98,4 +102,4 @@ Plans:
 | 2. Async Test Infrastructure | 1/1 | Complete   | 2026-03-05 | - |
 | 3. Deepgram SDK Streaming | 2/2 | Complete   | 2026-03-05 | - |
 | 4. File Streaming + Batch | 2/2 | Complete | 2026-03-05 | - |
-| 5. Test Coverage + Deployment | v2.0 | 0/TBD | Not started | - |
+| 5. Test Coverage + Deployment | v2.0 | 0/2 | Not started | - |
