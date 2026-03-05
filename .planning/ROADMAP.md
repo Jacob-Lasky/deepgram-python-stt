@@ -58,7 +58,11 @@ Plans:
   3. A 15-second speech pause does not silently disconnect the Deepgram WebSocket (keep-alive working)
   4. Starting, stopping, and starting transcription again in the same browser session works without error
   5. No threading primitives (`threading.Thread`, `threading.Event`, `time.sleep`) remain in the streaming path
-**Plans**: TBD
+**Plans**: 2 plans
+
+Plans:
+- [ ] 03-01-PLAN.md — Create test_streaming.py mock scaffold + implement streaming_task() and updated handlers in app.py
+- [ ] 03-02-PLAN.md — Start dev server + human verification of live transcription, keep-alive, graceful stop, and start/stop/start cycle
 
 ### Phase 4: File Streaming + Batch
 **Goal**: File upload streaming reuses the async streaming_task() infrastructure; batch /transcribe uses httpx.AsyncClient; final words are not dropped on file completion
@@ -88,6 +92,6 @@ Plans:
 |-------|-----------|----------------|--------|-----------|
 | 1. Eliminate gevent + ASGI Skeleton | 2/2 | Complete   | 2026-03-05 | - |
 | 2. Async Test Infrastructure | 1/1 | Complete   | 2026-03-05 | - |
-| 3. Deepgram SDK Streaming | v2.0 | 0/TBD | Not started | - |
+| 3. Deepgram SDK Streaming | v2.0 | 0/2 | Not started | - |
 | 4. File Streaming + Batch | v2.0 | 0/TBD | Not started | - |
 | 5. Test Coverage + Deployment | v2.0 | 0/TBD | Not started | - |
