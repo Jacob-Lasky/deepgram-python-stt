@@ -92,6 +92,6 @@ Plans:
 |-------|-----------|----------------|--------|-----------|
 | 1. Eliminate gevent + ASGI Skeleton | 2/2 | Complete   | 2026-03-05 | - |
 | 2. Async Test Infrastructure | 1/1 | Complete   | 2026-03-05 | - |
-| 3. Deepgram SDK Streaming | v2.0 | 0/2 | Not started | - |
+| 3. Deepgram SDK Streaming | 1/2 | In Progress|  | - |
 | 4. File Streaming + Batch | v2.0 | 0/TBD | Not started | - |
 | 5. Test Coverage + Deployment | v2.0 | 0/TBD | Not started | - |

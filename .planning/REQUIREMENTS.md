@@ -17,10 +17,10 @@
 
 ### Streaming
 
-- [ ] **STR-01**: Live mic streaming uses `AsyncDeepgramClient.listen.v1.connect()` (deepgram-sdk 6.x async API)
-- [ ] **STR-02**: Per-session Deepgram connection runs as an `asyncio.Task`, replacing threading.Thread
-- [ ] **STR-03**: `send_keep_alive()` sent periodically to prevent Deepgram idle timeout during speech pauses
-- [ ] **STR-04**: Stream stop waits for final results before closing (no dropped final words)
+- [x] **STR-01**: Live mic streaming uses `AsyncDeepgramClient.listen.v1.connect()` (deepgram-sdk 6.x async API)
+- [x] **STR-02**: Per-session Deepgram connection runs as an `asyncio.Task`, replacing threading.Thread
+- [x] **STR-03**: `send_keep_alive()` sent periodically to prevent Deepgram idle timeout during speech pauses
+- [x] **STR-04**: Stream stop waits for final results before closing (no dropped final words)
 
 ### File & Batch
 
@@ -65,10 +65,10 @@
 | TRANS-02 | Phase 1 | Complete |
 | TEST-01 | Phase 2 | Complete |
 | TEST-02 | Phase 5 | Pending |
-| STR-01 | Phase 3 | Pending |
-| STR-02 | Phase 3 | Pending |
-| STR-03 | Phase 3 | Pending |
-| STR-04 | Phase 3 | Pending |
+| STR-01 | Phase 3 | Complete |
+| STR-02 | Phase 3 | Complete |
+| STR-03 | Phase 3 | Complete |
+| STR-04 | Phase 3 | Complete |
 | FILE-01 | Phase 4 | Pending |
 | FILE-02 | Phase 4 | Pending |
 | DEPL-01 | Phase 5 | Pending |
