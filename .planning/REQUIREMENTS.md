@@ -12,8 +12,8 @@
 
 ### Transport
 
-- [ ] **TRANS-01**: App is served via `socketio.ASGIApp` wrapping FastAPI on uvicorn (single worker)
-- [ ] **TRANS-02**: All existing SocketIO event names and payload shapes are preserved verbatim (zero frontend changes required)
+- [x] **TRANS-01**: App is served via `socketio.ASGIApp` wrapping FastAPI on uvicorn (single worker)
+- [x] **TRANS-02**: All existing SocketIO event names and payload shapes are preserved verbatim (zero frontend changes required)
 
 ### Streaming
 
@@ -61,8 +61,8 @@
 |-------------|-------|--------|
 | STACK-01 | Phase 1 | Complete |
 | STACK-02 | Phase 1 | Complete |
-| TRANS-01 | Phase 1 | Pending |
-| TRANS-02 | Phase 1 | Pending |
+| TRANS-01 | Phase 1 | Complete |
+| TRANS-02 | Phase 1 | Complete |
 | TEST-01 | Phase 2 | Pending |
 | TEST-02 | Phase 5 | Pending |
 | STR-01 | Phase 3 | Pending |

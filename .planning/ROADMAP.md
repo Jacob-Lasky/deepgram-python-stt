@@ -14,7 +14,7 @@ This roadmap covers milestone v2.0 — the migration from Flask/gevent/websocket
 
 **Milestone Goal:** Replace Flask/gevent/websocket-client with FastAPI/asyncio/deepgram-sdk 6.x, making the app a correct reference implementation of the SDK's async streaming API.
 
-- [ ] **Phase 1: Eliminate gevent + ASGI Skeleton** - Remove the gevent import-time bomb and stand up FastAPI + python-socketio + uvicorn with stubbed handlers
+- [x] **Phase 1: Eliminate gevent + ASGI Skeleton** - Remove the gevent import-time bomb and stand up FastAPI + python-socketio + uvicorn with stubbed handlers (completed 2026-03-05)
 - [ ] **Phase 2: Async Test Infrastructure** - Establish UvicornTestServer + AsyncClient fixtures so every subsequent phase ships with tests
 - [ ] **Phase 3: Deepgram SDK Streaming** - Replace raw websocket-client with AsyncDeepgramClient.listen.v1.connect() for live mic transcription
 - [ ] **Phase 4: File Streaming + Batch** - Extend async streaming infrastructure to file uploads; replace requests with httpx for batch
@@ -83,7 +83,7 @@ This roadmap covers milestone v2.0 — the migration from Flask/gevent/websocket
 
 | Phase | Milestone | Plans Complete | Status | Completed |
 |-------|-----------|----------------|--------|-----------|
-| 1. Eliminate gevent + ASGI Skeleton | 1/2 | In Progress|  | - |
+| 1. Eliminate gevent + ASGI Skeleton | 2/2 | Complete   | 2026-03-05 | - |
 | 2. Async Test Infrastructure | v2.0 | 0/TBD | Not started | - |
 | 3. Deepgram SDK Streaming | v2.0 | 0/TBD | Not started | - |
 | 4. File Streaming + Batch | v2.0 | 0/TBD | Not started | - |
