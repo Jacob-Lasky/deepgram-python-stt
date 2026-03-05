@@ -2,13 +2,13 @@
 gsd_state_version: 1.0
 milestone: v2.0
 milestone_name: SDK Migration
-status: in_progress
-last_updated: "2026-03-05T16:57:00Z"
+status: unknown
+last_updated: "2026-03-05T18:18:56.429Z"
 progress:
-  total_phases: 5
-  completed_phases: 2
-  total_plans: 6
-  completed_plans: 4
+  total_phases: 3
+  completed_phases: 3
+  total_plans: 5
+  completed_plans: 5
 ---
 
 # Project State
@@ -18,16 +18,16 @@ progress:
 See: .planning/PROJECT.md (updated 2026-03-05)
 
 **Core value:** Accurate, real-time browser mic transcription demonstrating the official Deepgram Python SDK pattern end-to-end
-**Current focus:** Phase 3 Plan 01 complete — Deepgram SDK streaming implemented. 24 tests passing.
+**Current focus:** Phase 3 complete — all STR requirements verified live. Ready for Phase 4.
 
 ## Current Position
 
-Phase: 3 of 5 (Deepgram SDK Streaming)
-Plan: 1 of 1 in current phase — COMPLETE
-Status: Phase 3 Plan 01 complete, ready for Phase 4
-Last activity: 2026-03-05 — Completed plan 01: Deepgram SDK streaming (AsyncDeepgramClient, streaming_task, keep-alive, graceful stop, 9 new tests)
+Phase: 3 of 5 (Deepgram SDK Streaming) — COMPLETE
+Plan: 2 of 2 in current phase — COMPLETE
+Status: Phase 3 fully complete, ready for Phase 4
+Last activity: 2026-03-05 — Completed plan 02: live browser verification, 3 bugs fixed (bool params, timeslice 250ms, stream_started immediate emit), all STR-01..STR-04 confirmed
 
-Progress: [████░░░░░░] 45%
+Progress: [██████░░░░] 60%
 
 ## Performance Metrics
 
@@ -45,6 +45,7 @@ Progress: [████░░░░░░] 45%
 | 03-deepgram-sdk-streaming | 1 | 4 min | 4 min |
 
 *Updated after each plan completion*
+| Phase 03-deepgram-sdk-streaming P02 | 30 | 2 tasks | 1 files |
 
 ## Accumulated Context
 
@@ -69,6 +70,9 @@ Recent decisions affecting current work:
 - [Phase 03-01]: AsyncDeepgramClient(api_key=api_key) — constructor takes keyword-only args (Fern-generated BaseClient uses * in signature); positional arg raises TypeError
 - [Phase 03-01]: Integration tests with test-key receive Deepgram 401; streaming_task catches exception and emits stream_finished via finally block; tests accept stream_started OR stream_finished
 - [Phase 03-01]: test_no_threading_in_app checks import threading / threading.Thread / threading.Event explicitly to avoid false positive on async_mode comment
+- [Phase 03-02]: Audio timeslice must be 250ms (not 1000ms) — larger chunks cause tail words to be dropped when Stop is clicked before last chunk flushes
+- [Phase 03-02]: stream_started must emit immediately on WS connect, not after awaiting Metadata — Metadata timing is non-deterministic and can block frontend for 10s+
+- [Phase 03-02]: Deepgram API boolean params must be lowercase JSON (true/false), not Python bool (True/False) — Python bools silently ignored or cause key mismatch
 
 ### Pending Todos
 
@@ -76,11 +80,10 @@ None yet.
 
 ### Blockers/Concerns
 
-- [Phase 3]: Deepgram 10-second idle timeout is estimated, not formally documented — validate during Phase 4 integration testing with real API key
-- [Phase 3]: request_id from ListenV1Metadata timing relative to stream_started emission — needs integration validation with real API key
+- [Phase 3]: Deepgram 10-second idle timeout is estimated, not formally documented — keep-alive validated in live testing, but formal docs not found
 
 ## Session Continuity
 
 Last session: 2026-03-05
-Stopped at: Completed 03-01-PLAN.md — Deepgram SDK streaming complete, 24 tests passing, ready for Phase 4
+Stopped at: Completed 03-02-PLAN.md — Phase 3 fully verified with live browser and real Deepgram API key
 Resume file: None
