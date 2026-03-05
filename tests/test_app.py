@@ -99,12 +99,11 @@ def test_toggle_transcription_stop(mock_cls, socket_client):
     # Should not raise; close_stream may or may not be called depending on session state
 
 
-@patch("app.STTClient")
-def test_toggle_transcription_start_emits_stream_started(mock_cls, socket_client):
-    mock_instance = MagicMock()
-    mock_instance.build_url.return_value = "wss://api.deepgram.com/v1/listen"
-    mock_instance.open_stream.return_value = mock_instance
-    mock_cls.return_value = mock_instance
+@patch("stt.client.websocket.create_connection")
+def test_toggle_transcription_start_emits_stream_started(mock_create_conn, socket_client):
+    mock_ws = MagicMock()
+    mock_ws.recv.return_value = None  # stops recv_loop immediately
+    mock_create_conn.return_value = mock_ws
 
     socket_client.emit("toggle_transcription", {"action": "start", "params": {"model": "nova-3"}})
 
@@ -120,8 +119,11 @@ def test_audio_stream_no_connection_does_not_raise(socket_client):
 
 
 def test_detect_audio_settings_emits_response(socket_client):
-    with patch("app.detect_audio_settings", return_value={"sample_rate": 16000, "max_input_channels": 1}):
-        socket_client.emit("detect_audio_settings", {})
+    import sys
+    mock_module = MagicMock()
+    mock_module.detect_audio_settings.return_value = {"sample_rate": 16000, "max_input_channels": 1}
+    with patch.dict(sys.modules, {"common.audio_settings": mock_module}):
+        socket_client.emit("detect_audio_settings")
         received = socket_client.get_received()
         event_names = [r["name"] for r in received]
         assert "audio_settings" in event_names
