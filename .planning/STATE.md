@@ -10,24 +10,24 @@ See: .planning/PROJECT.md (updated 2026-03-05)
 ## Current Position
 
 Phase: 1 of 5 (Eliminate gevent + ASGI Skeleton)
-Plan: 0 of TBD in current phase
-Status: Ready to plan
-Last activity: 2026-03-05 — Milestone v2.0 roadmap created (5 phases, 14 requirements mapped)
+Plan: 1 of TBD in current phase
+Status: In progress
+Last activity: 2026-03-05 — Completed plan 01: dependency swap (flask/gevent -> fastapi/uvicorn/socketio/httpx)
 
-Progress: [░░░░░░░░░░] 0%
+Progress: [█░░░░░░░░░] 10%
 
 ## Performance Metrics
 
 **Velocity:**
-- Total plans completed: 0
-- Average duration: -
-- Total execution time: 0 hours
+- Total plans completed: 1
+- Average duration: 2 min
+- Total execution time: ~2 min
 
 **By Phase:**
 
 | Phase | Plans | Total | Avg/Plan |
 |-------|-------|-------|----------|
-| - | - | - | - |
+| 01-eliminate-gevent-asgi-skeleton | 1 | 2 min | 2 min |
 
 *Updated after each plan completion*
 
@@ -43,6 +43,8 @@ Recent decisions affecting current work:
 - [Pre-v2]: AsyncServer has no test_client() — tests require real UvicornTestServer + socketio.AsyncClient fixture
 - [Pre-v2]: SDK callbacks must be `async def` with `**kwargs` — sync or missing-kwargs callbacks silently never fire
 - [v1.0]: All 36 tests passing on branch `feature/alpine-frontend-stt-refactor` before v2 work begins
+- [01-01]: uvicorn Dockerfile CMD must target app:app (socketio.ASGIApp), not app:fastapi_app — confirmed in plan execution
+- [01-01]: python-socketio 5.14.3 asyncio extra warning is benign — async support is built-in, not gated by extra
 
 ### Pending Todos
 
@@ -57,5 +59,5 @@ None yet.
 ## Session Continuity
 
 Last session: 2026-03-05
-Stopped at: Roadmap created, STATE.md initialized — ready to plan Phase 1
+Stopped at: Completed 01-01-PLAN.md — dependency swap complete, ready for plan 02 (app.py rewrite)
 Resume file: None

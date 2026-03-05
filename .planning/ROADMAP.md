@@ -83,7 +83,7 @@ This roadmap covers milestone v2.0 — the migration from Flask/gevent/websocket
 
 | Phase | Milestone | Plans Complete | Status | Completed |
 |-------|-----------|----------------|--------|-----------|
-| 1. Eliminate gevent + ASGI Skeleton | v2.0 | 0/TBD | Not started | - |
+| 1. Eliminate gevent + ASGI Skeleton | 1/2 | In Progress|  | - |
 | 2. Async Test Infrastructure | v2.0 | 0/TBD | Not started | - |
 | 3. Deepgram SDK Streaming | v2.0 | 0/TBD | Not started | - |
 | 4. File Streaming + Batch | v2.0 | 0/TBD | Not started | - |

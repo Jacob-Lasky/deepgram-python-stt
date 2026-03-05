@@ -7,8 +7,8 @@
 
 ### Stack
 
-- [ ] **STACK-01**: App removes Flask, Flask-SocketIO, gevent, gevent-websocket, gunicorn, websocket-client, and requests from dependencies
-- [ ] **STACK-02**: App adds FastAPI, python-socketio[asyncio], uvicorn, and httpx
+- [x] **STACK-01**: App removes Flask, Flask-SocketIO, gevent, gevent-websocket, gunicorn, websocket-client, and requests from dependencies
+- [x] **STACK-02**: App adds FastAPI, python-socketio[asyncio], uvicorn, and httpx
 
 ### Transport
 
@@ -59,8 +59,8 @@
 
 | Requirement | Phase | Status |
 |-------------|-------|--------|
-| STACK-01 | Phase 1 | Pending |
-| STACK-02 | Phase 1 | Pending |
+| STACK-01 | Phase 1 | Complete |
+| STACK-02 | Phase 1 | Complete |
 | TRANS-01 | Phase 1 | Pending |
 | TRANS-02 | Phase 1 | Pending |
 | TEST-01 | Phase 2 | Pending |
