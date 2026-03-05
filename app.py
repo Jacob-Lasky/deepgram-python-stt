@@ -1,13 +1,19 @@
+import asyncio
 import logging
 import os
 import tempfile
 from pathlib import Path
 
 import socketio
+from deepgram import AsyncDeepgramClient
+from deepgram.core.events import EventType
+from deepgram.listen.v1.types import ListenV1Results, ListenV1Metadata
 from dotenv import load_dotenv
 from fastapi import FastAPI, Request, UploadFile, File
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
+
+from stt.options import clean_params, Mode
 
 load_dotenv()
 
@@ -30,6 +36,12 @@ fastapi_app.mount("/static", StaticFiles(directory="static"), name="static")
 
 # 3. Combined ASGI callable — THIS is what uvicorn serves, not fastapi_app
 app = socketio.ASGIApp(sio, fastapi_app)
+
+# Per-session state — module-level dict, not sio.session() (too slow for audio hot path)
+# Key: SocketIO session id (sid)
+# Value: dict with keys: task (asyncio.Task), stop_event (asyncio.Event),
+#        ws (AsyncV1SocketClient | None), request_id (str | None)
+_sessions: dict[str, dict] = {}
 
 
 # --- HTTP Routes ---
@@ -54,6 +66,97 @@ async def transcribe(request: Request):
     return JSONResponse({"error": "transcribe not yet implemented"}, status_code=501)
 
 
+# --- Helper functions ---
+
+def _params_to_sdk_kwargs(raw_params: dict) -> dict:
+    """Convert frontend params dict to deepgram-sdk 6.x keyword args.
+    model is required by connect() — default to nova-2 if not provided.
+    """
+    clean = clean_params(raw_params, Mode.STREAMING)
+    kwargs = {k: str(v) if not isinstance(v, (list, str)) else v
+              for k, v in clean.items()}
+    kwargs.setdefault("model", "nova-2")
+    return kwargs
+
+
+# --- Streaming Task ---
+
+async def streaming_task(sid: str, params: dict, stop_event: asyncio.Event) -> None:
+    """Owns the Deepgram WebSocket lifecycle for one SocketIO session.
+    Runs as an asyncio.Task. Emits stream_started, transcription_update, stream_finished.
+    """
+    api_key = os.getenv("DEEPGRAM_API_KEY", "")
+    dg = AsyncDeepgramClient(api_key=api_key)
+    sdk_kwargs = _params_to_sdk_kwargs(params)
+
+    try:
+        async with dg.listen.v1.connect(**sdk_kwargs) as ws:
+            # Store ws so on_audio_stream can call ws.send_media()
+            if sid in _sessions:
+                _sessions[sid]["ws"] = ws
+
+            # Wait for Metadata (request_id) before emitting stream_started
+            request_id_event = asyncio.Event()
+
+            async def on_message(msg, **kwargs):
+                if isinstance(msg, ListenV1Metadata):
+                    if sid in _sessions:
+                        _sessions[sid]["request_id"] = msg.request_id
+                    request_id_event.set()
+                elif isinstance(msg, ListenV1Results):
+                    transcript = msg.channel.alternatives[0].transcript
+                    is_final = bool(msg.is_final)
+                    await sio.emit("transcription_update", {
+                        "transcript": transcript,
+                        "is_final": is_final,
+                    }, to=sid)
+
+            ws.on(EventType.MESSAGE, on_message)
+            listen_task = asyncio.create_task(ws.start_listening())
+
+            try:
+                await asyncio.wait_for(request_id_event.wait(), timeout=10.0)
+            except asyncio.TimeoutError:
+                logger.warning("[%s] Timed out waiting for Deepgram Metadata (request_id)", sid)
+
+            request_id = _sessions[sid].get("request_id") if sid in _sessions else None
+            await sio.emit("stream_started", {"request_id": request_id}, to=sid)
+
+            # Keep-alive loop — sends every 8s (under Deepgram's ~10s idle timeout)
+            async def keep_alive_loop():
+                while not stop_event.is_set():
+                    await asyncio.sleep(8)
+                    if not stop_event.is_set():
+                        try:
+                            await ws.send_keep_alive()
+                        except Exception as e:
+                            logger.warning("[%s] keep_alive error: %s", sid, e)
+                            break
+
+            ka_task = asyncio.create_task(keep_alive_loop())
+
+            # Wait for stop signal from on_toggle_transcription(stop) or disconnect()
+            await stop_event.wait()
+
+            # Graceful shutdown: cancel keep-alive, send CloseStream, await final results
+            ka_task.cancel()
+            try:
+                await ws.send_close_stream()
+                await listen_task  # blocks until Deepgram flushes final Results + closes
+            except (asyncio.CancelledError, Exception) as e:
+                logger.warning("[%s] Error during graceful shutdown: %s", sid, e)
+                if not listen_task.done():
+                    listen_task.cancel()
+
+    except Exception as e:
+        logger.error("[%s] streaming_task error: %s", sid, e)
+    finally:
+        request_id = _sessions[sid].get("request_id") if sid in _sessions else None
+        await sio.emit("stream_finished", {"request_id": request_id}, to=sid)
+        _sessions.pop(sid, None)
+        logger.info("[%s] streaming_task finished, session cleaned up", sid)
+
+
 # --- SocketIO Event Handlers ---
 
 @sio.event
@@ -63,24 +166,49 @@ async def connect(sid, environ, auth=None):
 
 @sio.event
 async def disconnect(sid, reason=None):
-    logger.info("Client disconnected: %s", sid)
+    session = _sessions.pop(sid, None)
+    if session:
+        session["stop_event"].set()
+        task = session.get("task")
+        if task and not task.done():
+            task.cancel()
+    logger.info("Client disconnected: %s reason=%s", sid, reason)
 
 
 @sio.on("toggle_transcription")
 async def on_toggle_transcription(sid, data):
     action = data.get("action", "start")
-    logger.info("[%s] toggle_transcription action=%s (stub)", sid, action)
-    # Emit expected lifecycle events so the frontend does not hang in loading state
+    params = data.get("params", {})
+    logger.info("[%s] toggle_transcription action=%s", sid, action)
+
     if action == "start":
-        await sio.emit("stream_started", {"request_id": None}, to=sid)
-    else:
-        await sio.emit("stream_finished", {"request_id": None}, to=sid)
+        if sid in _sessions:
+            logger.warning("[%s] toggle_transcription(start) while already streaming — ignoring", sid)
+            return
+        stop_event = asyncio.Event()
+        _sessions[sid] = {"stop_event": stop_event, "ws": None, "request_id": None}
+        task = asyncio.create_task(streaming_task(sid, params, stop_event))
+        _sessions[sid]["task"] = task
+
+    elif action == "stop":
+        if sid not in _sessions:
+            # Not streaming — keep frontend in sync
+            await sio.emit("stream_finished", {"request_id": None}, to=sid)
+            return
+        _sessions[sid]["stop_event"].set()
+        # stream_finished is emitted by streaming_task after listen_task completes
 
 
 @sio.on("audio_stream")
 async def on_audio_stream(sid, data):
-    # Phase 1 stub — audio chunks are silently dropped
-    pass
+    session = _sessions.get(sid)
+    if session and session.get("ws") is not None:
+        try:
+            audio = data if isinstance(data, bytes) else bytes(data)
+            await session["ws"].send_media(audio)
+        except Exception as e:
+            logger.warning("[%s] send_media error: %s", sid, e)
+    # If ws is None (WebSocket not yet open), drop silently — browser buffers more audio
 
 
 @sio.on("detect_audio_settings")

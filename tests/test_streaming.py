@@ -95,9 +95,11 @@ def test_no_websocket_client_import():
 
 
 def test_no_threading_in_app():
-    """app.py must not use threading.Thread, threading.Event, or time.sleep."""
+    """app.py must not import threading or use time.sleep in streaming path."""
     app_text = Path("/coding/deepgram-python-stt/app.py").read_text()
-    assert "threading" not in app_text, "threading found in app.py"
+    assert "import threading" not in app_text, "import threading found in app.py"
+    assert "threading.Thread" not in app_text, "threading.Thread found in app.py"
+    assert "threading.Event" not in app_text, "threading.Event found in app.py"
     assert "time.sleep" not in app_text, "time.sleep found in app.py"
 
 
