@@ -32,7 +32,7 @@ This roadmap covers milestone v2.0 — the migration from Flask/gevent/websocket
   3. All SocketIO event names (`toggle_transcription`, `audio_stream`, `transcription_update`, etc.) are registered and receive messages without error
   4. Flask, Flask-SocketIO, gevent, gevent-websocket, gunicorn, websocket-client, and requests are absent from pyproject.toml
   5. FastAPI, python-socketio[asyncio], uvicorn, and httpx are present in pyproject.toml
-**Plans**: TBD
+**Plans**: 2 plans
 
 ### Phase 2: Async Test Infrastructure
 **Goal**: The test suite runs against the new ASGI stack using a real UvicornTestServer and socketio.AsyncClient, with at least one passing SocketIO connect test
@@ -43,7 +43,10 @@ This roadmap covers milestone v2.0 — the migration from Flask/gevent/websocket
   2. A `UvicornTestServer` fixture starts and stops the real ASGI app within the test session
   3. A `socketio.AsyncClient` fixture connects to the test server and receives the `connect` event
   4. At least one full round-trip test passes: client connects, emits an event, receives a response
-**Plans**: TBD
+**Plans**: 1 plan
+
+Plans:
+- [ ] 02-01-PLAN.md — Install pytest-asyncio, fix stt imports, delete test_client.py, write conftest.py fixtures, rewrite test_app.py for ASGI stack
 
 ### Phase 3: Deepgram SDK Streaming
 **Goal**: Live mic transcription works end-to-end via AsyncDeepgramClient.listen.v1.connect(), with per-session asyncio tasks, keep-alive, and clean stop
@@ -84,7 +87,7 @@ This roadmap covers milestone v2.0 — the migration from Flask/gevent/websocket
 | Phase | Milestone | Plans Complete | Status | Completed |
 |-------|-----------|----------------|--------|-----------|
 | 1. Eliminate gevent + ASGI Skeleton | 2/2 | Complete   | 2026-03-05 | - |
-| 2. Async Test Infrastructure | v2.0 | 0/TBD | Not started | - |
+| 2. Async Test Infrastructure | v2.0 | 0/1 | Not started | - |
 | 3. Deepgram SDK Streaming | v2.0 | 0/TBD | Not started | - |
 | 4. File Streaming + Batch | v2.0 | 0/TBD | Not started | - |
 | 5. Test Coverage + Deployment | v2.0 | 0/TBD | Not started | - |
