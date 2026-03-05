@@ -101,14 +101,11 @@ async def streaming_task(sid: str, params: dict, stop_event: asyncio.Event) -> N
             if sid in _sessions:
                 _sessions[sid]["ws"] = ws
 
-            # Wait for Metadata (request_id) before emitting stream_started
-            request_id_event = asyncio.Event()
-
             async def on_message(msg, **kwargs):
+                logger.debug("[%s] on_message type=%s", sid, type(msg).__name__)
                 if isinstance(msg, ListenV1Metadata):
                     if sid in _sessions:
                         _sessions[sid]["request_id"] = msg.request_id
-                    request_id_event.set()
                 elif isinstance(msg, ListenV1Results):
                     transcript = msg.channel.alternatives[0].transcript
                     is_final = bool(msg.is_final)
@@ -120,13 +117,8 @@ async def streaming_task(sid: str, params: dict, stop_event: asyncio.Event) -> N
             ws.on(EventType.MESSAGE, on_message)
             listen_task = asyncio.create_task(ws.start_listening())
 
-            try:
-                await asyncio.wait_for(request_id_event.wait(), timeout=10.0)
-            except asyncio.TimeoutError:
-                logger.warning("[%s] Timed out waiting for Deepgram Metadata (request_id)", sid)
-
-            request_id = _sessions[sid].get("request_id") if sid in _sessions else None
-            await sio.emit("stream_started", {"request_id": request_id}, to=sid)
+            # Emit stream_started immediately — don't gate on Metadata arrival
+            await sio.emit("stream_started", {"request_id": None}, to=sid)
 
             # Keep-alive loop — sends every 8s (under Deepgram's ~10s idle timeout)
             async def keep_alive_loop():
