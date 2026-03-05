@@ -73,8 +73,14 @@ def _params_to_sdk_kwargs(raw_params: dict) -> dict:
     model is required by connect() — default to nova-2 if not provided.
     """
     clean = clean_params(raw_params, Mode.STREAMING)
-    kwargs = {k: str(v) if not isinstance(v, (list, str)) else v
-              for k, v in clean.items()}
+    kwargs = {}
+    for k, v in clean.items():
+        if isinstance(v, bool):
+            kwargs[k] = "true" if v else "false"
+        elif isinstance(v, (list, str)):
+            kwargs[k] = v
+        else:
+            kwargs[k] = str(v)
     kwargs.setdefault("model", "nova-2")
     return kwargs
 
