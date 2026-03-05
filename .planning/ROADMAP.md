@@ -17,7 +17,7 @@ This roadmap covers milestone v2.0 — the migration from Flask/gevent/websocket
 - [x] **Phase 1: Eliminate gevent + ASGI Skeleton** - Remove the gevent import-time bomb and stand up FastAPI + python-socketio + uvicorn with stubbed handlers (completed 2026-03-05)
 - [x] **Phase 2: Async Test Infrastructure** - Establish UvicornTestServer + AsyncClient fixtures so every subsequent phase ships with tests (completed 2026-03-05)
 - [x] **Phase 3: Deepgram SDK Streaming** - Replace raw websocket-client with AsyncDeepgramClient.listen.v1.connect() for live mic transcription (completed 2026-03-05)
-- [ ] **Phase 4: File Streaming + Batch** - Extend async streaming infrastructure to file uploads; replace requests with httpx for batch
+- [x] **Phase 4: File Streaming + Batch** - Extend async streaming infrastructure to file uploads; replace requests with httpx for batch (completed 2026-03-05)
 - [ ] **Phase 5: Test Coverage + Deployment** - Full test coverage on all async event handlers; Dockerfile and Fly.io deployment updated
 
 ## Phase Details
@@ -97,5 +97,5 @@ Plans:
 | 1. Eliminate gevent + ASGI Skeleton | 2/2 | Complete   | 2026-03-05 | - |
 | 2. Async Test Infrastructure | 1/1 | Complete   | 2026-03-05 | - |
 | 3. Deepgram SDK Streaming | 2/2 | Complete   | 2026-03-05 | - |
-| 4. File Streaming + Batch | 1/2 | In Progress|  | - |
+| 4. File Streaming + Batch | 2/2 | Complete | 2026-03-05 | - |
 | 5. Test Coverage + Deployment | v2.0 | 0/TBD | Not started | - |

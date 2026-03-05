@@ -25,7 +25,7 @@
 ### File & Batch
 
 - [x] **FILE-01**: File upload streaming reuses the same async streaming infrastructure as mic streaming
-- [ ] **FILE-02**: Batch `/transcribe` route uses `httpx.AsyncClient` instead of `requests`
+- [x] **FILE-02**: Batch `/transcribe` route uses `httpx.AsyncClient` instead of `requests`
 
 ### Testing
 
@@ -70,7 +70,7 @@
 | STR-03 | Phase 3 | Complete |
 | STR-04 | Phase 3 | Complete |
 | FILE-01 | Phase 4 | Complete |
-| FILE-02 | Phase 4 | Pending |
+| FILE-02 | Phase 4 | Complete |
 | DEPL-01 | Phase 5 | Pending |
 | DEPL-02 | Phase 5 | Pending |
 
