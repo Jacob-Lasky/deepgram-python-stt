@@ -155,6 +155,86 @@ async def streaming_task(sid: str, params: dict, stop_event: asyncio.Event) -> N
         logger.info("[%s] streaming_task finished, session cleaned up", sid)
 
 
+# --- File Streaming Task ---
+
+CHUNK_SIZE = 4096
+
+
+async def file_streaming_task(
+    sid: str, filename: str, params: dict, stop_event: asyncio.Event
+) -> None:
+    """Streams an uploaded file to Deepgram over WebSocket.
+    Mirrors streaming_task() but reads from a local file instead of waiting on stop_event.
+    Emits stream_started, transcription_update, stream_finished.
+    """
+    api_key = os.getenv("DEEPGRAM_API_KEY", "")
+    dg = AsyncDeepgramClient(api_key=api_key)
+    sdk_kwargs = _params_to_sdk_kwargs(params)
+    file_path = TEMP_DIR / filename
+
+    try:
+        async with dg.listen.v1.connect(**sdk_kwargs) as ws:
+            # Store ws reference in session
+            if sid in _sessions:
+                _sessions[sid]["ws"] = ws
+
+            async def on_message(msg, **kwargs):
+                logger.debug("[%s] file on_message type=%s", sid, type(msg).__name__)
+                if isinstance(msg, ListenV1Metadata):
+                    if sid in _sessions:
+                        _sessions[sid]["request_id"] = msg.request_id
+                elif isinstance(msg, ListenV1Results):
+                    transcript = msg.channel.alternatives[0].transcript
+                    is_final = bool(msg.is_final)
+                    await sio.emit("transcription_update", {
+                        "transcript": transcript,
+                        "is_final": is_final,
+                    }, to=sid)
+
+            ws.on(EventType.MESSAGE, on_message)
+            listen_task = asyncio.create_task(ws.start_listening())
+
+            # Emit stream_started immediately — same pattern as streaming_task
+            await sio.emit("stream_started", {"request_id": None}, to=sid)
+
+            # Stream file in chunks; stop early if stop_event set
+            try:
+                with open(file_path, "rb") as f:
+                    while not stop_event.is_set():
+                        chunk = f.read(CHUNK_SIZE)
+                        if not chunk:
+                            break
+                        await ws.send_media(chunk)
+            except FileNotFoundError:
+                await sio.emit("stream_error", {"message": f"File not found: {filename}"}, to=sid)
+                # Graceful shutdown even on FileNotFoundError
+                try:
+                    await ws.send_close_stream()
+                    await listen_task
+                except (asyncio.CancelledError, Exception) as e:
+                    logger.warning("[%s] Error during file-not-found shutdown: %s", sid, e)
+                    if not listen_task.done():
+                        listen_task.cancel()
+                return
+
+            # EOF reached (or stop_event set) — flush final words (STR-04 pattern)
+            try:
+                await ws.send_close_stream()
+                await listen_task  # blocks until Deepgram flushes final Results + closes
+            except (asyncio.CancelledError, Exception) as e:
+                logger.warning("[%s] Error during file streaming graceful shutdown: %s", sid, e)
+                if not listen_task.done():
+                    listen_task.cancel()
+
+    except Exception as e:
+        logger.error("[%s] file_streaming_task error: %s", sid, e)
+    finally:
+        request_id = _sessions[sid].get("request_id") if sid in _sessions else None
+        await sio.emit("stream_finished", {"request_id": request_id}, to=sid)
+        _sessions.pop(sid, None)
+        logger.info("[%s] file_streaming_task finished, session cleaned up", sid)
+
+
 # --- SocketIO Event Handlers ---
 
 @sio.event
@@ -225,11 +305,32 @@ async def on_detect_audio_settings(sid):
 
 @sio.on("start_file_streaming")
 async def on_start_file_streaming(sid, data):
-    logger.info("[%s] start_file_streaming (stub)", sid)
-    await sio.emit("stream_started", {"request_id": None}, to=sid)
+    filename = data.get("filename") if data else None
+    params = data.get("params", {}) if data else {}
+    logger.info("[%s] start_file_streaming filename=%s", sid, filename)
+
+    if not filename:
+        await sio.emit("stream_error", {"message": "filename is required"}, to=sid)
+        return
+
+    if sid in _sessions:
+        logger.warning("[%s] start_file_streaming while already streaming — ignoring", sid)
+        return
+
+    stop_event = asyncio.Event()
+    _sessions[sid] = {"stop_event": stop_event, "ws": None, "request_id": None}
+    task = asyncio.create_task(file_streaming_task(sid, filename, params, stop_event))
+    _sessions[sid]["task"] = task
 
 
 @sio.on("stop_file_streaming")
-async def on_stop_file_streaming(sid):
-    logger.info("[%s] stop_file_streaming (stub)", sid)
-    await sio.emit("stream_finished", {"request_id": None}, to=sid)
+async def on_stop_file_streaming(sid, data=None):
+    logger.info("[%s] stop_file_streaming", sid)
+
+    if sid not in _sessions:
+        # Not streaming — keep frontend in sync
+        await sio.emit("stream_finished", {"request_id": None}, to=sid)
+        return
+
+    _sessions[sid]["stop_event"].set()
+    # stream_finished is emitted by file_streaming_task after listen_task completes
