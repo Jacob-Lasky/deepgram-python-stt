@@ -3,11 +3,11 @@ gsd_state_version: 1.0
 milestone: v2.0
 milestone_name: SDK Migration
 status: unknown
-last_updated: "2026-03-05T19:16:31Z"
+last_updated: "2026-03-05T19:20:10.732Z"
 progress:
-  total_phases: 5
+  total_phases: 4
   completed_phases: 4
-  total_plans: 8
+  total_plans: 7
   completed_plans: 7
 ---
 
