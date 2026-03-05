@@ -4,6 +4,7 @@ import os
 import tempfile
 from pathlib import Path
 
+import httpx
 import socketio
 from deepgram import AsyncDeepgramClient
 from deepgram.core.events import EventType
@@ -61,9 +62,56 @@ async def upload(file: UploadFile = File(...)):
 
 @fastapi_app.post("/transcribe")
 async def transcribe(request: Request):
-    # Phase 1 stub — real httpx implementation in Phase 4
-    await request.json()
-    return JSONResponse({"error": "transcribe not yet implemented"}, status_code=501)
+    body = await request.json()
+    params = body.get("params", {})
+    url = body.get("url")
+    filename = body.get("filename")
+
+    if not url and not filename:
+        return JSONResponse({"error": "url or filename required"}, status_code=400)
+
+    api_key = os.getenv("DEEPGRAM_API_KEY", "")
+
+    # Build clean query params for batch mode, convert bools to lowercase strings
+    clean = clean_params(params, Mode.BATCH)
+    query_params = {}
+    for k, v in clean.items():
+        if isinstance(v, bool):
+            query_params[k] = "true" if v else "false"
+        elif isinstance(v, (list, str)):
+            query_params[k] = v
+        else:
+            query_params[k] = str(v)
+    query_params.setdefault("model", "nova-2")
+
+    headers = {"Authorization": f"Token {api_key}"}
+
+    try:
+        async with httpx.AsyncClient(timeout=300.0) as client:
+            if url:
+                resp = await client.post(
+                    "https://api.deepgram.com/v1/listen",
+                    headers={**headers, "Content-Type": "application/json"},
+                    params=query_params,
+                    json={"url": url},
+                )
+            else:
+                file_path = TEMP_DIR / filename
+                if not file_path.exists():
+                    return JSONResponse({"error": "File not found"}, status_code=404)
+                file_bytes = file_path.read_bytes()
+                resp = await client.post(
+                    "https://api.deepgram.com/v1/listen",
+                    headers={**headers, "Content-Type": "audio/*"},
+                    params=query_params,
+                    content=file_bytes,
+                )
+            resp.raise_for_status()
+            return JSONResponse(resp.json())
+    except httpx.HTTPStatusError as e:
+        return JSONResponse({"error": str(e)}, status_code=e.response.status_code)
+    except Exception as e:
+        return JSONResponse({"error": str(e)}, status_code=500)
 
 
 # --- Helper functions ---
