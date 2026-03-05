@@ -9,17 +9,19 @@ def test_removes_internal_params():
 
 
 def test_removes_falsy_values():
-    result = clean_params({"model": "nova-3", "version": "", "channels": 0, "encoding": None, "redact": []}, Mode.STREAMING)
+    result = clean_params({"model": "nova-3", "version": "", "encoding": None, "redact": []}, Mode.STREAMING)
     assert "version" not in result
-    assert "channels" not in result
     assert "encoding" not in result
     assert "redact" not in result
+    # 0 is NOT stripped — clean_params only strips None, "", [], {}
+    assert result["model"] == "nova-3"
 
 
-def test_keeps_zero_when_meaningful():
-    # 0 is falsy but some numeric params default to 0 — clean_params strips them
-    result = clean_params({"alternatives": 0}, Mode.STREAMING)
-    assert "alternatives" not in result
+def test_keeps_zero_numerics():
+    # clean_params does NOT strip 0 — callers are responsible for omitting defaults
+    result = clean_params({"alternatives": 0, "channels": 0}, Mode.STREAMING)
+    assert result["alternatives"] == 0
+    assert result["channels"] == 0
 
 
 def test_removes_false_booleans():
