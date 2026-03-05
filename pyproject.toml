@@ -21,9 +21,9 @@ dependencies = [
 
 [tool.uv]
 package = false
-
-[tool.uv.dev-dependencies]
-pytest = ">=8.0"
+dev-dependencies = [
+    "pytest>=8.0",
+]
 
 [build-system]
 requires = ["hatchling"]
