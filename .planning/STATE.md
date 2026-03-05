@@ -3,12 +3,12 @@ gsd_state_version: 1.0
 milestone: v2.0
 milestone_name: SDK Migration
 status: unknown
-last_updated: "2026-03-05T18:21:37.496Z"
+last_updated: "2026-03-05T19:12:29Z"
 progress:
-  total_phases: 3
+  total_phases: 5
   completed_phases: 3
-  total_plans: 5
-  completed_plans: 5
+  total_plans: 6
+  completed_plans: 6
 ---
 
 # Project State
@@ -22,12 +22,12 @@ See: .planning/PROJECT.md (updated 2026-03-05)
 
 ## Current Position
 
-Phase: 3 of 5 (Deepgram SDK Streaming) — COMPLETE
-Plan: 2 of 2 in current phase — COMPLETE
-Status: Phase 3 fully complete, ready for Phase 4
-Last activity: 2026-03-05 — Completed plan 02: live browser verification, 3 bugs fixed (bool params, timeslice 250ms, stream_started immediate emit), all STR-01..STR-04 confirmed
+Phase: 4 of 5 (File Streaming + Batch) — IN PROGRESS
+Plan: 1 of 2 in current phase — COMPLETE
+Status: Phase 4 Plan 1 complete — file streaming implemented and tested
+Last activity: 2026-03-05 — Completed plan 04-01: file_streaming_task() implemented, stub handlers replaced, 3 new lifecycle tests added, all 9 tests pass
 
-Progress: [██████░░░░] 60%
+Progress: [████████░░] 70%
 
 ## Performance Metrics
 
@@ -43,9 +43,11 @@ Progress: [██████░░░░] 60%
 | 01-eliminate-gevent-asgi-skeleton | 2 | 7 min | 3.5 min |
 | 02-async-test-infrastructure | 1 | 5 min | 5 min |
 | 03-deepgram-sdk-streaming | 1 | 4 min | 4 min |
+| 04-file-streaming-batch | 1 | 8 min | 8 min |
 
 *Updated after each plan completion*
 | Phase 03-deepgram-sdk-streaming P02 | 30 | 2 tasks | 1 files |
+| Phase 04-file-streaming-batch P01 | 8 | 2 tasks | 2 files |
 
 ## Accumulated Context
 
@@ -73,6 +75,9 @@ Recent decisions affecting current work:
 - [Phase 03-02]: Audio timeslice must be 250ms (not 1000ms) — larger chunks cause tail words to be dropped when Stop is clicked before last chunk flushes
 - [Phase 03-02]: stream_started must emit immediately on WS connect, not after awaiting Metadata — Metadata timing is non-deterministic and can block frontend for 10s+
 - [Phase 03-02]: Deepgram API boolean params must be lowercase JSON (true/false), not Python bool (True/False) — Python bools silently ignored or cause key mismatch
+- [Phase 04-01]: file_streaming_task has no keep-alive loop — file streaming completes in seconds, unlike mic streaming which runs indefinitely
+- [Phase 04-01]: FileNotFoundError emits stream_error then closes WS gracefully (send_close_stream + await listen_task), not an early return without cleanup
+- [Phase 04-01]: on_stop_file_streaming signature (sid, data=None) — optional data param to handle frontend sending payload
 
 ### Pending Todos
 
@@ -85,5 +90,5 @@ None yet.
 ## Session Continuity
 
 Last session: 2026-03-05
-Stopped at: Completed 03-02-PLAN.md — Phase 3 fully verified with live browser and real Deepgram API key
+Stopped at: Completed 04-01-PLAN.md — FILE-01 implemented, 9 tests passing
 Resume file: None
