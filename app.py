@@ -119,13 +119,15 @@ async def _stt_batch(audio_bytes: bytes, stt_params: dict, api_key: str) -> dict
         return resp.json()
 
 
-async def _stt_streaming(audio_bytes: bytes, stt_params: dict, api_key: str) -> dict:
-    """Transcribe audio bytes via Deepgram WebSocket streaming API.
-    Chunks the audio and streams it through AsyncDeepgramClient, collecting
-    all final transcript segments. Returns {"transcript": str, "segments": list}.
+async def _stt_streaming(text: str, tts_model: str, stt_params: dict, api_key: str) -> dict:
+    """Pipe Deepgram TTS streaming response directly into the STT WebSocket.
+    TTS audio chunks are forwarded to STT as they arrive — naturally paced at
+    speech speed, no buffering or artificial timing needed.
+    Returns {"transcript": str, "segments": list}.
     """
     dg = AsyncDeepgramClient(api_key=api_key)
     sdk_kwargs = _params_to_sdk_kwargs(stt_params)
+    headers = {"Authorization": f"Token {api_key}"}
 
     segments = []
 
@@ -139,10 +141,18 @@ async def _stt_streaming(audio_bytes: bytes, stt_params: dict, api_key: str) -> 
         ws.on(EventType.MESSAGE, on_message)
         listen_task = asyncio.create_task(ws.start_listening())
 
-        chunk_size = 4096
-        for i in range(0, len(audio_bytes), chunk_size):
-            await ws.send_media(audio_bytes[i:i + chunk_size])
-            await asyncio.sleep(0)  # yield to event loop between chunks
+        # Stream TTS audio directly into STT WebSocket as chunks arrive
+        async with httpx.AsyncClient(timeout=60.0) as client:
+            async with client.stream(
+                "POST",
+                "https://api.deepgram.com/v1/speak",
+                headers={**headers, "Content-Type": "application/json"},
+                params={"model": tts_model, "encoding": "mp3"},
+                json={"text": text},
+            ) as tts_resp:
+                tts_resp.raise_for_status()
+                async for chunk in tts_resp.aiter_bytes(chunk_size=4096):
+                    await ws.send_media(chunk)
 
         await ws.send_close_stream()
         await listen_task
@@ -169,20 +179,23 @@ async def tts_transcribe(request: Request):
     api_key = os.getenv("DEEPGRAM_API_KEY", "")
 
     try:
-        audio_bytes = await _tts_generate(text, tts_model, api_key)
-
         if mode == "batch":
+            audio_bytes = await _tts_generate(text, tts_model, api_key)
             result = await _stt_batch(audio_bytes, stt_params, api_key)
             return JSONResponse(result)
 
         elif mode == "streaming":
-            result = await _stt_streaming(audio_bytes, stt_params, api_key)
+            result = await _stt_streaming(text, tts_model, stt_params, api_key)
             return JSONResponse(result)
 
-        else:  # both — run in parallel
+        else:  # both — batch buffers TTS bytes, streaming pipes TTS live; run in parallel
+            async def _batch_pipeline():
+                audio_bytes = await _tts_generate(text, tts_model, api_key)
+                return await _stt_batch(audio_bytes, stt_params, api_key)
+
             batch_result, stream_result = await asyncio.gather(
-                _stt_batch(audio_bytes, stt_params, api_key),
-                _stt_streaming(audio_bytes, stt_params, api_key),
+                _batch_pipeline(),
+                _stt_streaming(text, tts_model, stt_params, api_key),
             )
             return JSONResponse({"batch": batch_result, "streaming": stream_result})
 
