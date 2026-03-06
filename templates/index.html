@@ -944,6 +944,9 @@
           <button class="mode-tab" :class="mode==='batch' && 'active'" @click="setMode('batch')">
             <i class="fas fa-layer-group"></i> Batch
           </button>
+          <button class="mode-tab" :class="mode==='tts' && 'active'" @click="setMode('tts')">
+            <i class="fas fa-comment-dots"></i> TTS Test
+          </button>
         </div>
 
         <!-- Input controls section -->
@@ -1037,6 +1040,30 @@
                   @click="runBatch()">
                   <i :class="batchLoading ? 'fas fa-spinner fa-spin' : 'fas fa-bolt'"></i>
                   <span x-text="batchLoading ? 'Transcribing...' : 'Transcribe'"></span>
+                </button>
+              </div>
+            </template>
+
+            <!-- TTS Test mode -->
+            <template x-if="mode === 'tts'">
+              <div style="display:flex;flex-direction:column;gap:8px;">
+                <div class="field">
+                  <div class="field-label">Text to speak</div>
+                  <textarea class="field-input"
+                    x-model="ttsText"
+                    placeholder="Enter text to convert to speech and transcribe..."
+                    rows="5"
+                    style="resize:vertical;min-height:80px;font-family:inherit;"></textarea>
+                </div>
+                <div class="field">
+                  <div class="field-label">TTS Voice</div>
+                  <input class="field-input" x-model="ttsModel" placeholder="aura-2-asteria-en">
+                </div>
+                <button class="action-btn btn-primary"
+                  :disabled="ttsLoading || !ttsText.trim()"
+                  @click="runTts()">
+                  <i :class="ttsLoading ? 'fas fa-spinner fa-spin' : 'fas fa-comment-dots'"></i>
+                  <span x-text="ttsLoading ? 'Generating...' : 'Speak & Transcribe'"></span>
                 </button>
               </div>
             </template>
@@ -1457,7 +1484,7 @@
 
       <!-- Editable URL bar -->
       <div class="url-bar">
-        <span class="url-scheme" x-text="mode === 'batch' ? 'https://' : 'wss://'"></span>
+        <span class="url-scheme" x-text="(mode === 'batch' || mode === 'tts') ? 'https://' : 'wss://'"></span>
         <input class="url-input" type="text"
           x-model="urlDisplay"
           @focus="urlFocused = true"
@@ -1487,6 +1514,9 @@
         </button>
         <button class="right-tab" :class="rightTab === 'batch' && 'active'" @click="rightTab = 'batch'" x-show="mode === 'batch'">
           Batch Result
+        </button>
+        <button class="right-tab" :class="rightTab === 'tts' && 'active'" @click="rightTab = 'tts'" x-show="mode === 'tts'">
+          TTS Result
         </button>
       </div>
 
@@ -1588,6 +1618,29 @@
           <template x-if="batchResult">
             <div class="batch-result">
               <div class="json-tree" x-html="renderJsonTree(batchResult)"></div>
+            </div>
+          </template>
+        </div>
+      </template>
+
+      <!-- TTS result tab -->
+      <template x-if="rightTab === 'tts'">
+        <div class="responses-pane">
+          <div class="responses-toolbar">
+            <span class="text-muted text-sm">TTS → STT result</span>
+            <button class="action-btn btn-secondary btn-sm" @click="ttsResult = null">
+              <i class="fas fa-trash"></i> Clear
+            </button>
+          </div>
+          <template x-if="!ttsResult">
+            <div class="empty-state" style="flex:1;">
+              <i class="fas fa-comment-dots"></i>
+              <p>Enter text and click Speak &amp; Transcribe to test.</p>
+            </div>
+          </template>
+          <template x-if="ttsResult">
+            <div class="batch-result">
+              <div class="json-tree" x-html="renderJsonTree(ttsResult)"></div>
             </div>
           </template>
         </div>

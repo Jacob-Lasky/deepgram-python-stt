@@ -24,6 +24,12 @@ function appData() {
     batchLoading: false,
     batchResult: null,
 
+    // TTS Test
+    ttsText: '',
+    ttsModel: 'aura-2-asteria-en',
+    ttsLoading: false,
+    ttsResult: null,
+
     // Transcript
     finalTranscript: '',
     interimTranscript: '',
@@ -141,6 +147,13 @@ function appData() {
         this._urlUpdateTimer = setTimeout(() => this.refreshUrl(), 80);
       });
 
+      this.$watch('ttsModel', () => {
+        if (this.mode === 'tts' && !this.urlFocused) {
+          clearTimeout(this._urlUpdateTimer);
+          this._urlUpdateTimer = setTimeout(() => this.refreshUrl(), 80);
+        }
+      });
+
       this.refreshUrl();
     },
 
@@ -238,10 +251,12 @@ function appData() {
         this.stopFileStream();
       }
       this.mode = m;
-      if (m !== 'batch') {
-        this.rightTab = 'transcript';
-      } else {
+      if (m === 'batch') {
         this.rightTab = 'batch';
+      } else if (m === 'tts') {
+        this.rightTab = 'tts';
+      } else {
+        this.rightTab = 'transcript';
       }
     },
 
@@ -413,6 +428,40 @@ function appData() {
       }
     },
 
+    async runTts() {
+      if (!this.ttsText.trim()) return;
+      this.ttsLoading = true;
+      this.ttsResult = null;
+      this.rightTab = 'tts';
+
+      try {
+        const res = await fetch('/api/tts-transcribe', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            text: this.ttsText,
+            tts_model: this.ttsModel,
+            stt_params: this.getCleanParams('batch'),
+          }),
+        });
+        const data = await res.json();
+        if (data.error) throw new Error(data.error);
+        this.ttsResult = data;
+
+        const transcript = this.extractBatchTranscript(data);
+        if (transcript) {
+          this.finalTranscript += this.escapeHtml(transcript) + '\n';
+        }
+        this.addResponse('final', data);
+        this.showToast('TTS transcription complete', 'success');
+      } catch (err) {
+        this.showToast('TTS error: ' + err.message, 'error');
+        this.ttsResult = { error: err.message };
+      } finally {
+        this.ttsLoading = false;
+      }
+    },
+
     extractBatchTranscript(data) {
       try {
         return data?.results?.channels?.[0]?.alternatives?.[0]?.transcript || '';
@@ -423,8 +472,15 @@ function appData() {
 
     // ---- URL computation ----
     refreshUrl() {
-      const isStreaming = this.mode !== 'batch';
       const base = this.params.base_url || 'api.deepgram.com';
+
+      if (this.mode === 'tts') {
+        const ttsModel = this.ttsModel || 'aura-2-asteria-en';
+        this.urlDisplay = `${base}/v1/speak?model=${ttsModel}&encoding=mp3`;
+        return `https://${this.urlDisplay}`;
+      }
+
+      const isStreaming = this.mode !== 'batch';
       const scheme = isStreaming ? 'wss' : 'https';
 
       const qp = this.buildQueryParams(isStreaming);
