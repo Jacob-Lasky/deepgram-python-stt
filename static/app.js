@@ -212,6 +212,10 @@ function appData() {
 
     // ---- Mode switch ----
     setMode(m) {
+      // Stop any active file stream before switching tabs
+      if (m !== 'file' && this.fileStreamState === 'streaming') {
+        this.stopFileStream();
+      }
       this.mode = m;
       if (m !== 'batch') {
         this.rightTab = 'transcript';
@@ -225,6 +229,16 @@ function appData() {
       try {
         const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
         this.micStream = stream;
+
+        // Audio passthrough — play mic input through speakers for live monitoring
+        try {
+          this._audioCtx = new AudioContext();
+          this._audioSource = this._audioCtx.createMediaStreamSource(stream);
+          this._audioSource.connect(this._audioCtx.destination);
+        } catch (e) {
+          console.warn('[DG] audio passthrough unavailable:', e);
+        }
+
         const options = {};
         if (MediaRecorder.isTypeSupported('audio/webm;codecs=opus')) {
           options.mimeType = 'audio/webm;codecs=opus';
@@ -271,6 +285,15 @@ function appData() {
       if (this.micStream) {
         this.micStream.getTracks().forEach(t => t.stop());
         this.micStream = null;
+      }
+      // Stop audio passthrough
+      if (this._audioSource) {
+        this._audioSource.disconnect();
+        this._audioSource = null;
+      }
+      if (this._audioCtx) {
+        this._audioCtx.close();
+        this._audioCtx = null;
       }
       this.socket.emit('toggle_transcription', { params: {}, action: 'stop' });
       this.streamUrl = '';
