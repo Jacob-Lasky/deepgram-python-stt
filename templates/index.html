@@ -842,6 +842,47 @@
       border-radius: 8px;
     }
 
+    /* ---- TTS Diff card ---- */
+    .tts-diff-card {
+      flex-shrink: 0;
+      background: #0d1117;
+      border-top: 1px solid #1f2937;
+      padding: 10px 14px;
+      font-size: 13px;
+    }
+    .tts-diff-card-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      color: #6b7280;
+      font-size: 11px;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+      margin-bottom: 8px;
+    }
+    .diff-row {
+      display: flex;
+      gap: 10px;
+      align-items: baseline;
+      margin-bottom: 5px;
+      line-height: 1.6;
+    }
+    .diff-row:last-child { margin-bottom: 0; }
+    .diff-label {
+      flex-shrink: 0;
+      width: 88px;
+      color: #6b7280;
+      font-size: 11px;
+      text-transform: uppercase;
+      letter-spacing: 0.04em;
+      padding-top: 1px;
+    }
+    .diff-text { color: #e5e7eb; word-break: break-word; }
+    .diff-equal { color: #9ca3af; }
+    .diff-delete { color: #f87171; text-decoration: line-through; }
+    .diff-insert { color: #4ade80; }
+    .diff-arrow { color: #6b7280; font-size: 10px; margin: 0 1px; }
+
     /* ---- Interim debug panel ---- */
     .debug-panel {
       flex-shrink: 0;
@@ -1562,6 +1603,31 @@
               </template>
             </div>
           </div>
+
+          <!-- TTS diff card — visible only in TTS mode after a run -->
+          <template x-if="mode === 'tts' && ttsLastText !== ''">
+            <div class="tts-diff-card">
+              <div class="tts-diff-card-header">
+                <span><i class="fas fa-code-branch" style="margin-right:5px;"></i>TTS Comparison</span>
+                <button class="action-btn btn-secondary btn-sm" style="padding:2px 7px;font-size:11px;" @click="ttsLastText = ''; ttsLastTranscript = ''">
+                  <i class="fas fa-times"></i>
+                </button>
+              </div>
+              <div class="diff-row">
+                <span class="diff-label">Sent</span>
+                <span class="diff-text" x-text="ttsLastText"></span>
+              </div>
+              <div class="diff-row">
+                <span class="diff-label">Transcribed</span>
+                <span class="diff-text" x-text="ttsLastTranscript || '(empty)'"></span>
+              </div>
+              <div class="diff-row">
+                <span class="diff-label">Difference</span>
+                <span class="diff-text" x-html="renderTtsDiff(ttsLastText, ttsLastTranscript)"></span>
+              </div>
+            </div>
+          </template>
+
         </div>
       </template>
 

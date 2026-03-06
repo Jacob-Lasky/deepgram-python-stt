@@ -29,6 +29,8 @@ function appData() {
     ttsModel: 'aura-2-asteria-en',
     ttsLoading: false,
     ttsResult: null,
+    ttsLastText: '',
+    ttsLastTranscript: '',
 
     // Transcript
     finalTranscript: '',
@@ -449,6 +451,8 @@ function appData() {
         this.ttsResult = data;
 
         const transcript = this.extractBatchTranscript(data);
+        this.ttsLastText = this.ttsText;
+        this.ttsLastTranscript = transcript || '';
         if (transcript) {
           this.finalTranscript += this.escapeHtml(transcript) + '\n';
         }
@@ -469,6 +473,66 @@ function appData() {
       } catch {
         return '';
       }
+    },
+
+    // Word-level LCS diff between two strings.
+    // Returns array of ops: {type:'equal'|'delete'|'insert'|'replace', ...}
+    _wordDiff(original, transcribed) {
+      const norm = s => s.toLowerCase().replace(/^['"]+|[.,!?;:'"]+$/g, '');
+      const a = original.trim().split(/\s+/).filter(Boolean);
+      const b = transcribed.trim().split(/\s+/).filter(Boolean);
+      const m = a.length, n = b.length;
+
+      // Build LCS table
+      const dp = Array.from({ length: m + 1 }, () => new Array(n + 1).fill(0));
+      for (let i = 1; i <= m; i++) {
+        for (let j = 1; j <= n; j++) {
+          dp[i][j] = norm(a[i-1]) === norm(b[j-1])
+            ? dp[i-1][j-1] + 1
+            : Math.max(dp[i-1][j], dp[i][j-1]);
+        }
+      }
+
+      // Backtrack
+      const ops = [];
+      let i = m, j = n;
+      while (i > 0 || j > 0) {
+        if (i > 0 && j > 0 && norm(a[i-1]) === norm(b[j-1])) {
+          ops.unshift({ type: 'equal', word: a[i-1] });
+          i--; j--;
+        } else if (j > 0 && (i === 0 || dp[i][j-1] >= dp[i-1][j])) {
+          ops.unshift({ type: 'insert', word: b[j-1] });
+          j--;
+        } else {
+          ops.unshift({ type: 'delete', word: a[i-1] });
+          i--;
+        }
+      }
+
+      // Merge adjacent delete+insert pairs into replace
+      const merged = [];
+      for (let k = 0; k < ops.length; k++) {
+        if (k + 1 < ops.length && ops[k].type === 'delete' && ops[k+1].type === 'insert') {
+          merged.push({ type: 'replace', old: ops[k].word, new: ops[k+1].word });
+          k++;
+        } else {
+          merged.push(ops[k]);
+        }
+      }
+      return merged;
+    },
+
+    renderTtsDiff(original, transcribed) {
+      if (!original && !transcribed) return '';
+      const e = s => this.escapeHtml(s);
+      const ops = this._wordDiff(original, transcribed);
+      const parts = ops.map(op => {
+        if (op.type === 'equal')   return `<span class="diff-equal">${e(op.word)}</span>`;
+        if (op.type === 'delete')  return `<span class="diff-delete">${e(op.word)}</span>`;
+        if (op.type === 'insert')  return `<span class="diff-insert">${e(op.word)}</span>`;
+        if (op.type === 'replace') return `<span class="diff-delete">${e(op.old)}</span><span class="diff-arrow">→</span><span class="diff-insert">${e(op.new)}</span>`;
+      });
+      return parts.join(' ');
     },
 
     // ---- URL computation ----
