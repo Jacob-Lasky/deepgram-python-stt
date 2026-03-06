@@ -4,8 +4,7 @@ An interactive demo app for exploring Deepgram's real-time speech-to-text API. S
 
 **Live demo:** [deepgram-python-stt.fly.dev](https://deepgram-python-stt.fly.dev)
 
-<!-- TODO: add screenshot of mic mode with transcript showing -->
-<!-- ![Deepgram STT Explorer — Mic Mode](docs/images/stt-mic.png) -->
+![Deepgram STT Explorer](docs/images/stt-mic.png)
 
 ---
 
