@@ -21,15 +21,16 @@ Accurate, real-time transcription from browser mic to screen with minimal latenc
 - ✓ Alpine.js settings panel (model, language, diarization, etc.) — v1.0
 - ✓ Client-side audio buffering until stream ready (prevents dropped WebM header) — v1.0
 - ✓ Debug log panel with interim/final transcript tagging — v1.0
+- ✓ Deepgram Python SDK (AsyncDeepgramClient) for streaming — v2.0
+- ✓ FastAPI/asyncio backend (eliminates gevent monkey-patching) — v2.0
+- ✓ python-socketio + uvicorn (async-compatible SocketIO) — v2.0
+- ✓ Async test suite with UvicornTestServer + pytest-asyncio — v2.0
 
 ### Active
 
 <!-- Current scope. Building toward these. -->
 
-- [ ] Use Deepgram Python SDK (deepgram-sdk) for streaming instead of raw websocket-client
-- [ ] Replace Flask/gevent with FastAPI/asyncio (required for SDK async API)
-- [ ] Replace Flask-SocketIO/gevent with async-compatible SocketIO (python-socketio + uvicorn)
-- [ ] Tests updated to cover new async stack
+*(none — v2.0 complete)*
 
 ### Out of Scope
 
@@ -39,18 +40,16 @@ Accurate, real-time transcription from browser mic to screen with minimal latenc
 
 ## Context
 
-**Current stack (v1.0):**
-- Flask + Flask-SocketIO + gevent (async via monkey-patching)
-- websocket-client (synchronous, gevent-patched) for Deepgram streaming
-- deepgram-sdk 6.0.1 is installed but NOT used for streaming — only imported
-- Manual URL construction + binary WebSocket protocol
-- Alpine.js frontend, deployed on Fly.io
+**Current stack (v2.0):**
+- FastAPI + python-socketio (ASGIApp) + uvicorn
+- deepgram-sdk 6.x (AsyncDeepgramClient) for all streaming
+- pytest-asyncio + UvicornTestServer for async test coverage
+- Alpine.js frontend (unchanged from v1.0), deployed on Fly.io
 
-**Why migrate:**
-- The repo's stated purpose is to be a reference implementation for the Deepgram Python SDK
-- The current implementation bypasses the SDK entirely for the core streaming feature
-- deepgram-sdk uses asyncio natively; Flask/gevent's monkey-patching conflicts with it
-- FastAPI + uvicorn is the idiomatic async Python web stack
+**v1.0 stack (archived):**
+- Flask + Flask-SocketIO + gevent (monkey-patching)
+- websocket-client (synchronous, gevent-patched) for Deepgram streaming
+- deepgram-sdk installed but unused for streaming
 
 **Deployment:** Fly.io (deepgram-python-stt.fly.dev), Dockerfile present
 
@@ -65,10 +64,16 @@ Accurate, real-time transcription from browser mic to screen with minimal latenc
 
 | Decision | Rationale | Outcome |
 |----------|-----------|---------|
-| websocket-client over deepgram-sdk in v1 | gevent incompatibility with asyncio | ⚠️ Revisit — reason for v2 migration |
-| gevent monkey-patching | Required for Flask-SocketIO sync model | ⚠️ Revisit — eliminated in v2 |
-| FastAPI for v2 | Deepgram SDK requires asyncio; FastAPI is idiomatic async Python | — Pending |
-| Keep SocketIO event protocol | Frontend compatibility, zero JS changes needed | — Pending |
+| websocket-client over deepgram-sdk in v1 | gevent incompatibility with asyncio | ✓ Replaced in v2.0 |
+| gevent monkey-patching | Required for Flask-SocketIO sync model | ✓ Eliminated in v2.0 |
+| FastAPI + uvicorn for v2 | Deepgram SDK requires asyncio; FastAPI is idiomatic async Python | ✓ Shipped v2.0 |
+| Keep SocketIO event protocol | Frontend compatibility, zero JS changes needed | ✓ Zero frontend changes in v2.0 |
+| socketio.ASGIApp wraps FastAPI | Pointing uvicorn directly at FastAPI causes 404s for SocketIO | ✓ Required pattern |
+| UvicornTestServer for tests | AsyncServer has no test_client(); needs real server for SocketIO tests | ✓ Working test suite |
+| SDK callbacks must be async def with **kwargs | sync or missing-kwargs callbacks silently never fire | ✓ Critical SDK contract |
+| stream_started on WS connect, not Metadata | Metadata is non-deterministic (10s+ delay); connect is immediate | ✓ Correct UX behavior |
+| Deepgram boolean params as lowercase strings | SDK/API rejects Python bools; "true"/"false" required | ✓ Required pattern |
+| Audio timeslice 250ms | 1000ms chunks drop final words on Stop | ✓ Correct setting |
 
 ---
-*Last updated: 2026-03-05 — Milestone v2.0 started*
+*Last updated: 2026-03-06 — Milestone v2.0 shipped*

@@ -80,6 +80,57 @@ async def serve_file(filename: str):
     return FileResponse(path)
 
 
+@fastapi_app.post("/api/tts-transcribe")
+async def tts_transcribe(request: Request):
+    body = await request.json()
+    text = body.get("text", "").strip()
+    tts_model = body.get("tts_model", "aura-2-asteria-en")
+    stt_params = body.get("stt_params", {})
+
+    if not text:
+        return JSONResponse({"error": "text is required"}, status_code=400)
+
+    api_key = os.getenv("DEEPGRAM_API_KEY", "")
+    headers = {"Authorization": f"Token {api_key}"}
+
+    clean = clean_params(stt_params, Mode.BATCH)
+    query_params = {}
+    for k, v in clean.items():
+        if isinstance(v, bool):
+            query_params[k] = "true" if v else "false"
+        elif isinstance(v, (list, str)):
+            query_params[k] = v
+        else:
+            query_params[k] = str(v)
+    query_params.setdefault("model", "nova-2")
+
+    try:
+        async with httpx.AsyncClient(timeout=60.0) as client:
+            # Step 1: TTS — convert text to MP3
+            tts_resp = await client.post(
+                "https://api.deepgram.com/v1/speak",
+                headers={**headers, "Content-Type": "application/json"},
+                params={"model": tts_model, "encoding": "mp3"},
+                json={"text": text},
+            )
+            tts_resp.raise_for_status()
+            audio_bytes = tts_resp.content
+
+            # Step 2: STT — transcribe the generated audio
+            stt_resp = await client.post(
+                "https://api.deepgram.com/v1/listen",
+                headers={**headers, "Content-Type": "audio/mp3"},
+                params=query_params,
+                content=audio_bytes,
+            )
+            stt_resp.raise_for_status()
+            return JSONResponse(stt_resp.json())
+    except httpx.HTTPStatusError as e:
+        return JSONResponse({"error": str(e)}, status_code=e.response.status_code)
+    except Exception as e:
+        return JSONResponse({"error": str(e)}, status_code=500)
+
+
 @fastapi_app.post("/transcribe")
 async def transcribe(request: Request):
     body = await request.json()

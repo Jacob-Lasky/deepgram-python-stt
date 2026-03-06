@@ -842,6 +842,47 @@
       border-radius: 8px;
     }
 
+    /* ---- TTS Diff card ---- */
+    .tts-diff-card {
+      flex-shrink: 0;
+      background: #0d1117;
+      border-top: 1px solid #1f2937;
+      padding: 10px 14px;
+      font-size: 13px;
+    }
+    .tts-diff-card-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      color: #6b7280;
+      font-size: 11px;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+      margin-bottom: 8px;
+    }
+    .diff-row {
+      display: flex;
+      gap: 10px;
+      align-items: baseline;
+      margin-bottom: 5px;
+      line-height: 1.6;
+    }
+    .diff-row:last-child { margin-bottom: 0; }
+    .diff-label {
+      flex-shrink: 0;
+      width: 88px;
+      color: #6b7280;
+      font-size: 11px;
+      text-transform: uppercase;
+      letter-spacing: 0.04em;
+      padding-top: 1px;
+    }
+    .diff-text { color: #e5e7eb; word-break: break-word; }
+    .diff-equal { color: #9ca3af; }
+    .diff-delete { color: #f87171; text-decoration: line-through; }
+    .diff-insert { color: #4ade80; }
+    .diff-arrow { color: #6b7280; font-size: 10px; margin: 0 1px; }
+
     /* ---- Interim debug panel ---- */
     .debug-panel {
       flex-shrink: 0;
@@ -944,6 +985,9 @@
           <button class="mode-tab" :class="mode==='batch' && 'active'" @click="setMode('batch')">
             <i class="fas fa-layer-group"></i> Batch
           </button>
+          <button class="mode-tab" :class="mode==='tts' && 'active'" @click="setMode('tts')">
+            <i class="fas fa-comment-dots"></i> TTS Test
+          </button>
         </div>
 
         <!-- Input controls section -->
@@ -1037,6 +1081,30 @@
                   @click="runBatch()">
                   <i :class="batchLoading ? 'fas fa-spinner fa-spin' : 'fas fa-bolt'"></i>
                   <span x-text="batchLoading ? 'Transcribing...' : 'Transcribe'"></span>
+                </button>
+              </div>
+            </template>
+
+            <!-- TTS Test mode -->
+            <template x-if="mode === 'tts'">
+              <div style="display:flex;flex-direction:column;gap:8px;">
+                <div class="field">
+                  <div class="field-label">Text to speak</div>
+                  <textarea class="field-input"
+                    x-model="ttsText"
+                    placeholder="Enter text to convert to speech and transcribe..."
+                    rows="5"
+                    style="resize:vertical;min-height:80px;font-family:inherit;"></textarea>
+                </div>
+                <div class="field">
+                  <div class="field-label">TTS Voice</div>
+                  <input class="field-input" x-model="ttsModel" placeholder="aura-2-asteria-en">
+                </div>
+                <button class="action-btn btn-primary"
+                  :disabled="ttsLoading || !ttsText.trim()"
+                  @click="runTts()">
+                  <i :class="ttsLoading ? 'fas fa-spinner fa-spin' : 'fas fa-comment-dots'"></i>
+                  <span x-text="ttsLoading ? 'Generating...' : 'Speak & Transcribe'"></span>
                 </button>
               </div>
             </template>
@@ -1457,7 +1525,7 @@
 
       <!-- Editable URL bar -->
       <div class="url-bar">
-        <span class="url-scheme" x-text="mode === 'batch' ? 'https://' : 'wss://'"></span>
+        <span class="url-scheme" x-text="(mode === 'batch' || mode === 'tts') ? 'https://' : 'wss://'"></span>
         <input class="url-input" type="text"
           x-model="urlDisplay"
           @focus="urlFocused = true"
@@ -1487,6 +1555,9 @@
         </button>
         <button class="right-tab" :class="rightTab === 'batch' && 'active'" @click="rightTab = 'batch'" x-show="mode === 'batch'">
           Batch Result
+        </button>
+        <button class="right-tab" :class="rightTab === 'tts' && 'active'" @click="rightTab = 'tts'" x-show="mode === 'tts'">
+          TTS Result
         </button>
       </div>
 
@@ -1532,6 +1603,31 @@
               </template>
             </div>
           </div>
+
+          <!-- TTS diff card — visible only in TTS mode after a run -->
+          <template x-if="mode === 'tts' && ttsLastText !== ''">
+            <div class="tts-diff-card">
+              <div class="tts-diff-card-header">
+                <span><i class="fas fa-code-branch" style="margin-right:5px;"></i>TTS Comparison</span>
+                <button class="action-btn btn-secondary btn-sm" style="padding:2px 7px;font-size:11px;" @click="ttsLastText = ''; ttsLastTranscript = ''">
+                  <i class="fas fa-times"></i>
+                </button>
+              </div>
+              <div class="diff-row">
+                <span class="diff-label">Sent</span>
+                <span class="diff-text" x-text="ttsLastText"></span>
+              </div>
+              <div class="diff-row">
+                <span class="diff-label">Transcribed</span>
+                <span class="diff-text" x-text="ttsLastTranscript || '(empty)'"></span>
+              </div>
+              <div class="diff-row">
+                <span class="diff-label">Difference</span>
+                <span class="diff-text" x-html="renderTtsDiff(ttsLastText, ttsLastTranscript)"></span>
+              </div>
+            </div>
+          </template>
+
         </div>
       </template>
 
@@ -1588,6 +1684,29 @@
           <template x-if="batchResult">
             <div class="batch-result">
               <div class="json-tree" x-html="renderJsonTree(batchResult)"></div>
+            </div>
+          </template>
+        </div>
+      </template>
+
+      <!-- TTS result tab -->
+      <template x-if="rightTab === 'tts'">
+        <div class="responses-pane">
+          <div class="responses-toolbar">
+            <span class="text-muted text-sm">TTS → STT result</span>
+            <button class="action-btn btn-secondary btn-sm" @click="ttsResult = null">
+              <i class="fas fa-trash"></i> Clear
+            </button>
+          </div>
+          <template x-if="!ttsResult">
+            <div class="empty-state" style="flex:1;">
+              <i class="fas fa-comment-dots"></i>
+              <p>Enter text and click Speak &amp; Transcribe to test.</p>
+            </div>
+          </template>
+          <template x-if="ttsResult">
+            <div class="batch-result">
+              <div class="json-tree" x-html="renderJsonTree(ttsResult)"></div>
             </div>
           </template>
         </div>
