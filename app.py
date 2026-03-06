@@ -60,6 +60,14 @@ async def upload(file: UploadFile = File(...)):
     return JSONResponse({"filename": file.filename, "size": path.stat().st_size})
 
 
+@fastapi_app.get("/files/{filename}")
+async def serve_file(filename: str):
+    path = TEMP_DIR / filename
+    if not path.exists():
+        return JSONResponse({"error": "not found"}, status_code=404)
+    return FileResponse(path)
+
+
 @fastapi_app.post("/transcribe")
 async def transcribe(request: Request):
     body = await request.json()

@@ -193,6 +193,10 @@ function appData() {
         this.streamUrl = '';
         if (this.fileStreamState === 'streaming') this.fileStreamState = 'done';
         this.recording = false;
+        if (this._fileAudio) {
+          this._fileAudio.pause();
+          this._fileAudio = null;
+        }
       });
 
       this.socket.on('stream_error', (data) => {
@@ -229,16 +233,6 @@ function appData() {
       try {
         const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
         this.micStream = stream;
-
-        // Audio passthrough — play mic input through speakers for live monitoring
-        try {
-          this._audioCtx = new AudioContext();
-          this._audioSource = this._audioCtx.createMediaStreamSource(stream);
-          this._audioSource.connect(this._audioCtx.destination);
-        } catch (e) {
-          console.warn('[DG] audio passthrough unavailable:', e);
-        }
-
         const options = {};
         if (MediaRecorder.isTypeSupported('audio/webm;codecs=opus')) {
           options.mimeType = 'audio/webm;codecs=opus';
@@ -286,15 +280,6 @@ function appData() {
         this.micStream.getTracks().forEach(t => t.stop());
         this.micStream = null;
       }
-      // Stop audio passthrough
-      if (this._audioSource) {
-        this._audioSource.disconnect();
-        this._audioSource = null;
-      }
-      if (this._audioCtx) {
-        this._audioCtx.close();
-        this._audioCtx = null;
-      }
       this.socket.emit('toggle_transcription', { params: {}, action: 'stop' });
       this.streamUrl = '';
     },
@@ -335,6 +320,11 @@ function appData() {
       if (!this.uploadedFile) return;
       this.fileStreamState = 'streaming';
       this.rightTab = 'transcript';
+
+      // Play the uploaded file through speakers in sync with transcription
+      this._fileAudio = new Audio(`/files/${encodeURIComponent(this.uploadedFile.serverName)}`);
+      this._fileAudio.play().catch(e => console.warn('[DG] audio playback failed:', e));
+
       this.socket.emit('start_file_streaming', {
         params: this.getCleanParams('streaming'),
         filename: this.uploadedFile.serverName,
@@ -342,6 +332,10 @@ function appData() {
     },
 
     stopFileStream() {
+      if (this._fileAudio) {
+        this._fileAudio.pause();
+        this._fileAudio = null;
+      }
       this.socket.emit('stop_file_streaming', {});
       this.fileStreamState = 'idle';
       this.streamUrl = '';
