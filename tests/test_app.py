@@ -162,3 +162,37 @@ async def test_stop_file_streaming_when_not_streaming_emits_stream_finished(sio_
     await sio_client.emit("stop_file_streaming", {})
     result = await asyncio.wait_for(future, timeout=5.0)
     assert "request_id" in result
+
+
+# ---- Audio device / raw audio events ----
+
+async def test_detect_audio_settings_emits_audio_settings(sio_client):
+    """Emitting detect_audio_settings must receive an audio_settings response
+    with positive integer sample_rate and channels values.
+    In CI (no audio hardware) the handler falls back to defaults (16000, 1).
+    Test accepts any valid positive int — not hardcoded values.
+    """
+    future = asyncio.get_running_loop().create_future()
+
+    @sio_client.on("audio_settings")
+    def on_audio_settings(data):
+        if not future.done():
+            future.set_result(data)
+
+    await sio_client.emit("detect_audio_settings")
+    result = await asyncio.wait_for(future, timeout=5.0)
+    assert "sample_rate" in result
+    assert "channels" in result
+    assert isinstance(result["sample_rate"], int)
+    assert isinstance(result["channels"], int)
+    assert result["sample_rate"] > 0
+    assert result["channels"] > 0
+
+
+async def test_audio_stream_when_not_streaming_does_not_crash(sio_client):
+    """Emitting audio_stream bytes when no session is active (ws=None) must drop
+    silently without crashing the server. Verifies the guard path in on_audio_stream.
+    """
+    await sio_client.emit("audio_stream", b"\x00\x01\x02\x03\xff\xfe")
+    await asyncio.sleep(0.1)
+    assert sio_client.connected
