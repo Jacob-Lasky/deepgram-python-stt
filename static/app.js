@@ -17,6 +17,9 @@ function appData() {
     // File streaming
     uploadedFile: null,      // { name, serverName, size }
     fileStreamState: 'idle', // 'idle' | 'streaming' | 'done' | 'error'
+    _transcriptQueue: [],    // timed queue for file streaming sync
+    _syncRaf: null,          // requestAnimationFrame handle
+    _fileAudio: null,        // Audio element for file playback
 
     // Batch
     batchSource: '',
@@ -140,6 +143,56 @@ function appData() {
       this.refreshUrl();
     },
 
+    // ---- Transcript helpers ----
+    _applyTranscriptUpdate(data) {
+      const text = data.transcript || '';
+      const prefix = (data.speaker != null) ? `<span class="speaker-label">[Speaker ${data.speaker}]</span> ` : '';
+      if (data.is_final) {
+        this.interimTranscript = '';
+        if (text.trim()) {
+          this.finalTranscript += prefix + this.escapeHtml(text) + '\n';
+          this.$nextTick(() => {
+            const el = this.$refs.transcriptFinal;
+            if (el) el.scrollTop = el.scrollHeight;
+          });
+          this._logDebug('final', (data.speaker != null ? `[Speaker ${data.speaker}] ` : '') + text);
+        }
+        this.addResponse('final', data);
+      } else {
+        this.interimTranscript = (data.speaker != null ? `[Speaker ${data.speaker}] ` : '') + text;
+        if (text.trim()) {
+          this._logDebug('interim', (data.speaker != null ? `[Speaker ${data.speaker}] ` : '') + text);
+        }
+        this.addResponse('interim', data);
+      }
+    },
+
+    _startTranscriptSync() {
+      const tick = () => {
+        if (!this._fileAudio) return;
+        const t = this._fileAudio.currentTime;
+        while (this._transcriptQueue.length && this._transcriptQueue[0].start <= t) {
+          this._applyTranscriptUpdate(this._transcriptQueue.shift());
+        }
+        this._syncRaf = requestAnimationFrame(tick);
+      };
+      this._syncRaf = requestAnimationFrame(tick);
+    },
+
+    _stopTranscriptSync(flushRemaining = false) {
+      if (this._syncRaf) {
+        cancelAnimationFrame(this._syncRaf);
+        this._syncRaf = null;
+      }
+      if (flushRemaining) {
+        while (this._transcriptQueue.length) {
+          this._applyTranscriptUpdate(this._transcriptQueue.shift());
+        }
+      } else {
+        this._transcriptQueue = [];
+      }
+    },
+
     // ---- SocketIO ----
     setupSocket() {
       this.socket = io(window.location.origin, { transports: ['websocket', 'polling'] });
@@ -155,27 +208,13 @@ function appData() {
       });
 
       this.socket.on('transcription_update', (data) => {
-        const text = data.transcript || '';
-        const prefix = (data.speaker != null) ? `<span class="speaker-label">[Speaker ${data.speaker}]</span> ` : '';
-
-        if (data.is_final) {
-          this.interimTranscript = '';
-          if (text.trim()) {
-            this.finalTranscript += prefix + this.escapeHtml(text) + '\n';
-            this.$nextTick(() => {
-              const el = this.$refs.transcriptFinal;
-              if (el) el.scrollTop = el.scrollHeight;
-            });
-            this._logDebug('final', (data.speaker != null ? `[Speaker ${data.speaker}] ` : '') + text);
-          }
-          this.addResponse('final', data);
-        } else {
-          this.interimTranscript = (data.speaker != null ? `[Speaker ${data.speaker}] ` : '') + text;
-          if (text.trim()) {
-            this._logDebug('interim', (data.speaker != null ? `[Speaker ${data.speaker}] ` : '') + text);
-          }
-          this.addResponse('interim', data);
+        // For file streaming: queue final transcripts and release them in sync
+        // with audio playback. Interim transcripts display immediately (transient).
+        if (data.is_final && data.start != null && this._fileAudio) {
+          this._transcriptQueue.push(data);
+          return;
         }
+        this._applyTranscriptUpdate(data);
       });
 
       this.socket.on('stream_started', (data) => {
@@ -193,9 +232,15 @@ function appData() {
         this.streamUrl = '';
         if (this.fileStreamState === 'streaming') this.fileStreamState = 'done';
         this.recording = false;
+        // Keep audio playing; flush any remaining queued transcripts after
+        // audio finishes so nothing is dropped
         if (this._fileAudio) {
-          this._fileAudio.pause();
-          this._fileAudio = null;
+          this._fileAudio.addEventListener('ended', () => {
+            this._stopTranscriptSync(true); // flush remainder
+            this._fileAudio = null;
+          }, { once: true });
+        } else {
+          this._stopTranscriptSync(true);
         }
       });
 
@@ -321,9 +366,10 @@ function appData() {
       this.fileStreamState = 'streaming';
       this.rightTab = 'transcript';
 
-      // Play the uploaded file through speakers in sync with transcription
+      // Play uploaded file through speakers; RAF loop syncs transcript display
       this._fileAudio = new Audio(`/files/${encodeURIComponent(this.uploadedFile.serverName)}`);
       this._fileAudio.play().catch(e => console.warn('[DG] audio playback failed:', e));
+      this._startTranscriptSync();
 
       this.socket.emit('start_file_streaming', {
         params: this.getCleanParams('streaming'),
@@ -332,6 +378,7 @@ function appData() {
     },
 
     stopFileStream() {
+      this._stopTranscriptSync(false); // discard queued — user stopped early
       if (this._fileAudio) {
         this._fileAudio.pause();
         this._fileAudio = null;

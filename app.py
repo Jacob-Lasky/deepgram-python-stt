@@ -245,6 +245,7 @@ async def file_streaming_task(
                     await sio.emit("transcription_update", {
                         "transcript": transcript,
                         "is_final": is_final,
+                        "start": msg.start,
                     }, to=sid)
 
             ws.on(EventType.MESSAGE, on_message)
