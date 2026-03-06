@@ -1100,6 +1100,19 @@
                   <div class="field-label">TTS Voice</div>
                   <input class="field-input" x-model="ttsModel" placeholder="aura-2-asteria-en">
                 </div>
+                <div class="field">
+                  <div class="field-label">STT Mode</div>
+                  <div style="display:flex;gap:4px;">
+                    <template x-for="m in ['batch','streaming','both']" :key="m">
+                      <button class="action-btn btn-sm"
+                        :class="ttsMode === m ? 'btn-primary' : 'btn-secondary'"
+                        style="flex:1;text-transform:capitalize;"
+                        @click="ttsMode = m"
+                        x-text="m">
+                      </button>
+                    </template>
+                  </div>
+                </div>
                 <button class="action-btn btn-primary"
                   :disabled="ttsLoading || !ttsText.trim()"
                   @click="runTts()">
@@ -1617,14 +1630,32 @@
                 <span class="diff-label">Sent</span>
                 <span class="diff-text" x-text="ttsLastText"></span>
               </div>
-              <div class="diff-row">
-                <span class="diff-label">Transcribed</span>
-                <span class="diff-text" x-text="ttsLastTranscript || '(empty)'"></span>
-              </div>
-              <div class="diff-row">
-                <span class="diff-label">Difference</span>
-                <span class="diff-text" x-html="renderTtsDiff(ttsLastText, ttsLastTranscript)"></span>
-              </div>
+              <!-- Batch row(s) -->
+              <template x-if="ttsLastTranscript !== '' && (ttsLastStreamTranscript === '' || ttsLastTranscript !== ttsLastStreamTranscript)">
+                <div>
+                  <div class="diff-row">
+                    <span class="diff-label" x-text="ttsLastStreamTranscript ? 'Batch' : 'Transcribed'"></span>
+                    <span class="diff-text" x-text="ttsLastTranscript || '(empty)'"></span>
+                  </div>
+                  <div class="diff-row">
+                    <span class="diff-label" x-text="ttsLastStreamTranscript ? 'Batch diff' : 'Difference'"></span>
+                    <span class="diff-text" x-html="renderTtsDiff(ttsLastText, ttsLastTranscript)"></span>
+                  </div>
+                </div>
+              </template>
+              <!-- Streaming row(s) -->
+              <template x-if="ttsLastStreamTranscript !== ''">
+                <div>
+                  <div class="diff-row" style="margin-top: 4px;">
+                    <span class="diff-label">Streaming</span>
+                    <span class="diff-text" x-text="ttsLastStreamTranscript || '(empty)'"></span>
+                  </div>
+                  <div class="diff-row">
+                    <span class="diff-label">Stream diff</span>
+                    <span class="diff-text" x-html="renderTtsDiff(ttsLastText, ttsLastStreamTranscript)"></span>
+                  </div>
+                </div>
+              </template>
             </div>
           </template>
 
