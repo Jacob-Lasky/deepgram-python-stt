@@ -1,78 +1,153 @@
-![image](https://github.com/user-attachments/assets/4a244f31-a6dd-4fc5-a08d-c78aa37c8635)
+# Deepgram STT Explorer
 
-# Flask Live Transcription Starter
+An interactive demo app for exploring Deepgram's real-time speech-to-text API. Supports live microphone streaming, audio file streaming, and batch transcription — with a full params panel so you can experiment with every Deepgram option without writing code.
 
-Get started using Deepgram's Live Transcription with this Flask demo app.
+**Live demo:** [deepgram-python-stt.fly.dev](https://deepgram-python-stt.fly.dev)
 
-## What is Deepgram?
+![Deepgram STT Explorer](docs/images/stt-mic.png)
 
-[Deepgram’s](https://deepgram.com/) voice AI platform provides APIs for speech-to-text, text-to-speech, and full speech-to-speech voice agents. Over 200,000+ developers use Deepgram to build voice AI products and features.
+---
 
-## Sign-up to Deepgram
+## Features
 
-Before you start, it's essential to generate a Deepgram API key to use in this project. [Sign-up now for Deepgram and create an API key](https://console.deepgram.com/signup?jump=keys).
+- **Mic streaming** — Real-time transcription from your browser microphone using Deepgram's WebSocket API
+- **File streaming** — Upload an audio file and stream it to Deepgram in real-time, with transcript synced to playback
+- **Batch transcription** — Submit a file or URL for single-shot transcription via the REST API
+- **Live params panel** — Toggle every major Deepgram option (model, language, smart format, VAD, endpointing, redaction, keyterms, and more) and see the URL update instantly
+- **Import / Export** — Paste a Deepgram WebSocket URL or JSON object to import settings; copy the current URL to share a configuration
+- **API responses tab** — Every WebSocket event (interim, final, metadata) logged with expandable JSON
+- **Error display** — Stream errors surfaced directly in the UI with a red badge in the responses tab
+
+<!-- TODO: add screenshot of file streaming mode -->
+<!-- ![Deepgram STT Explorer — File Streaming](docs/images/stt-file.png) -->
+
+---
+
+## Stack
+
+| Layer | Technology |
+|-------|-----------|
+| Backend | FastAPI + python-socketio (async) + uvicorn |
+| Deepgram | [deepgram-sdk](https://github.com/deepgram/deepgram-python-sdk) v6.x (async WebSocket API) |
+| Frontend | Alpine.js (no build step) |
+| Deployment | Fly.io |
+| Tests | pytest + asyncio + UvicornTestServer + socketio.AsyncClient |
+
+---
 
 ## Quickstart
 
-### Manual
+### Prerequisites
 
-Follow these steps to get started with this starter application.
+- Python 3.12+
+- [uv](https://github.com/astral-sh/uv) (recommended) or pip
+- A [Deepgram API key](https://console.deepgram.com/signup?jump=keys)
 
-#### Clone the repository
-
-Go to GitHub and [clone the repository](https://github.com/Jacob-Lasky/deepgram-python-stt).
-
-#### Install dependencies
-
-Install the project dependencies.
+### Run locally
 
 ```bash
-pip install -r requirements.txt
+git clone https://github.com/Jacob-Lasky/deepgram-python-stt
+cd deepgram-python-stt
+
+cp sample.env .env
+# Edit .env and add your DEEPGRAM_API_KEY
+
+uv run uvicorn app:app --host 0.0.0.0 --port 8080
 ```
-or with uv,
+
+Open [http://localhost:8080](http://localhost:8080).
+
+### Run with Docker
 
 ```bash
-uv venv
-uv pip install -r requirements.txt
+docker build -t deepgram-stt .
+docker run -p 8080:8080 -e DEEPGRAM_API_KEY=your_key_here deepgram-stt
 ```
 
-#### Edit the config file
+---
 
-Copy the code from `sample.env` and create a new file called `.env`. Paste in the code and enter your API key you generated in the [Deepgram console](https://console.deepgram.com/).
+## Configuration
 
-```js
-DEEPGRAM_API_KEY=%api_key%
+Copy `sample.env` to `.env`:
+
+```env
+DEEPGRAM_API_KEY=your_key_here
 ```
 
-#### Run the application
+---
 
-You need to run the app.py (port 8001) to in your browser and access it at <http://127.0.0.1:8001>
+## Supported Redact Values
+
+All values below are verified to work with the Deepgram streaming API:
+
+| Value | Description |
+|-------|-------------|
+| `pci` | Credit card numbers, expiration dates, CVV |
+| `ssn` | Social security numbers |
+| `credit_card` | Credit card numbers (granular) |
+| `account_number` | Bank account numbers |
+| `routing_number` | ABA routing numbers |
+| `passport_number` | Passport numbers |
+| `driver_license` | Driver's license numbers |
+| `numerical_pii` | Numerical PII (granular) |
+| `numbers` | Series of 3+ consecutive numerals |
+| `aggressive_numbers` | All numerals |
+| `phi` | Protected health information |
+| `name` | Person names |
+| `dob` | Dates of birth |
+| `username` | Usernames |
+
+---
+
+## Running Tests
 
 ```bash
-python app.py
+uv run pytest tests/ -v
 ```
-or if using uv,
+
+30 tests, 1 skipped. Tests use a real `UvicornTestServer` + `socketio.AsyncClient` — no mocking of the SocketIO layer.
+
+<!-- TODO: add screenshot of batch mode -->
+<!-- ![Deepgram STT Explorer — Batch Mode](docs/images/stt-batch.png) -->
+
+---
+
+## Key Gotchas
+
+Non-obvious things discovered during the Flask/gevent → FastAPI async migration:
+
+- **`gevent.monkey.patch_all()` must be the very first edit** — it corrupts the asyncio event loop at import time even if called before imports
+- **`socketio.ASGIApp` must wrap FastAPI** — pointing uvicorn at `fastapi_app` directly causes SocketIO 404s
+- **`AsyncServer` has no `test_client()`** — tests require a real `UvicornTestServer` + `socketio.AsyncClient` fixture
+- **SDK callbacks must be `async def` with `**kwargs`** — sync callbacks or missing `**kwargs` silently never fire
+- **Audio `timeslice` must be 250ms** — 1000ms chunks cause the last word before Stop to be dropped
+- **`stream_started` must emit immediately on WS connect**, not after `Metadata` — Metadata timing is non-deterministic and can block the frontend for 10+ seconds
+- **Deepgram boolean params must be lowercase strings** (`"true"`/`"false"`), not Python bools
+
+---
+
+## Deploying to Fly.io
 
 ```bash
-uv run python app.py
+fly launch --name your-app-name   # first time only
+fly secrets set DEEPGRAM_API_KEY=your_key_here
+fly deploy
 ```
 
-## Issue Reporting
+The `fly.toml` and `Dockerfile` are already configured for uvicorn on port 8080.
 
-If you have found a bug or if you have a feature request, please report them at this repository issues section. Please do not report security vulnerabilities on the public GitHub issue tracker. The [Security Policy](./SECURITY.md) details the procedure for contacting Deepgram.
+---
 
 ## Getting Help
 
-We love to hear from you so if you have questions, comments or find a bug in the project, let us know! You can either:
+- [Open an issue](https://github.com/Jacob-Lasky/deepgram-python-stt/issues/new)
+- [Deepgram Community](https://community.deepgram.com/)
+- [Deepgram Docs](https://developers.deepgram.com/)
+- [Deepgram GitHub](https://github.com/deepgram)
+- [Deepgram Devs GitHub](https://github.com/deepgram-devs)
 
-- [Open an issue in this repository](https://github.com/Jacob-Lasky/deepgram-python-stt/issues/new)
-- [Join the Deepgram Github Discussions Community](https://github.com/orgs/deepgram/discussions)
-- [Join the Deepgram Discord Community](https://discord.gg/xWRaCDBtW4)
-
-## Author
-
-[Deepgram](https://deepgram.com)
+---
 
 ## License
 
-This project is licensed under the MIT license. See the [LICENSE](./LICENSE) file for more info.
+MIT — see [LICENSE](./LICENSE)
