@@ -208,9 +208,10 @@ function appData() {
       });
 
       this.socket.on('transcription_update', (data) => {
-        // For file streaming: queue final transcripts and release them in sync
-        // with audio playback. Interim transcripts display immediately (transient).
-        if (data.is_final && data.start != null && this._fileAudio) {
+        // For file streaming: queue ALL transcripts by start time so text
+        // stays locked to the audio position. Without _fileAudio (mic mode)
+        // display immediately.
+        if (data.start != null && this._fileAudio) {
           this._transcriptQueue.push(data);
           return;
         }
@@ -230,17 +231,19 @@ function appData() {
 
       this.socket.on('stream_finished', () => {
         this.streamUrl = '';
-        if (this.fileStreamState === 'streaming') this.fileStreamState = 'done';
         this.recording = false;
-        // Keep audio playing; flush any remaining queued transcripts after
-        // audio finishes so nothing is dropped
+        // Keep fileStreamState === 'streaming' (Stop button stays visible)
+        // until audio actually finishes playing. State flips to 'done' only
+        // when the Audio element fires 'ended' — or immediately if no audio.
         if (this._fileAudio) {
           this._fileAudio.addEventListener('ended', () => {
             this._stopTranscriptSync(true); // flush remainder
             this._fileAudio = null;
+            this.fileStreamState = 'done';
           }, { once: true });
         } else {
           this._stopTranscriptSync(true);
+          this.fileStreamState = 'done';
         }
       });
 
