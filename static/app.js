@@ -453,6 +453,7 @@ function appData() {
           this.finalTranscript += this.escapeHtml(transcript) + '\n';
         }
         this.addResponse('final', data);
+        this.rightTab = 'transcript';
         this.showToast('TTS transcription complete', 'success');
       } catch (err) {
         this.showToast('TTS error: ' + err.message, 'error');
