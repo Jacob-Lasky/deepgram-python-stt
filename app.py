@@ -4,6 +4,8 @@ import os
 import tempfile
 from pathlib import Path
 
+from mutagen import File as MutagenFile
+
 import httpx
 import socketio
 from deepgram import AsyncDeepgramClient
@@ -254,6 +256,16 @@ async def file_streaming_task(
             # Emit stream_started immediately — same pattern as streaming_task
             await sio.emit("stream_started", {"request_id": None}, to=sid)
 
+            # Compute real-time pacing: sleep between chunks so Deepgram
+            # receives audio at 1x speed, keeping transcripts in sync with playback.
+            try:
+                audio_info = MutagenFile(file_path)
+                duration = audio_info.info.length if audio_info else None
+            except Exception:
+                duration = None
+            file_size = file_path.stat().st_size
+            sleep_per_chunk = (CHUNK_SIZE / file_size * duration) if duration and file_size else 0
+
             # Stream file in chunks; stop early if stop_event set
             try:
                 with open(file_path, "rb") as f:
@@ -262,6 +274,8 @@ async def file_streaming_task(
                         if not chunk:
                             break
                         await ws.send_media(chunk)
+                        if sleep_per_chunk:
+                            await asyncio.sleep(sleep_per_chunk)
             except FileNotFoundError:
                 await sio.emit("stream_error", {"message": f"File not found: {filename}"}, to=sid)
                 # Graceful shutdown even on FileNotFoundError

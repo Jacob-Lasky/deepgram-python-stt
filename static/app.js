@@ -17,8 +17,6 @@ function appData() {
     // File streaming
     uploadedFile: null,      // { name, serverName, size }
     fileStreamState: 'idle', // 'idle' | 'streaming' | 'done' | 'error'
-    _transcriptQueue: [],    // timed queue for file streaming sync
-    _syncRaf: null,          // requestAnimationFrame handle
     _fileAudio: null,        // Audio element for file playback
 
     // Batch
@@ -167,32 +165,6 @@ function appData() {
       }
     },
 
-    _startTranscriptSync() {
-      const tick = () => {
-        if (!this._fileAudio) return;
-        const t = this._fileAudio.currentTime;
-        while (this._transcriptQueue.length && this._transcriptQueue[0].start <= t) {
-          this._applyTranscriptUpdate(this._transcriptQueue.shift());
-        }
-        this._syncRaf = requestAnimationFrame(tick);
-      };
-      this._syncRaf = requestAnimationFrame(tick);
-    },
-
-    _stopTranscriptSync(flushRemaining = false) {
-      if (this._syncRaf) {
-        cancelAnimationFrame(this._syncRaf);
-        this._syncRaf = null;
-      }
-      if (flushRemaining) {
-        while (this._transcriptQueue.length) {
-          this._applyTranscriptUpdate(this._transcriptQueue.shift());
-        }
-      } else {
-        this._transcriptQueue = [];
-      }
-    },
-
     // ---- SocketIO ----
     setupSocket() {
       this.socket = io(window.location.origin, { transports: ['websocket', 'polling'] });
@@ -208,13 +180,6 @@ function appData() {
       });
 
       this.socket.on('transcription_update', (data) => {
-        // For file streaming: queue ALL transcripts by start time so text
-        // stays locked to the audio position. Without _fileAudio (mic mode)
-        // display immediately.
-        if (data.start != null && this._fileAudio) {
-          this._transcriptQueue.push(data);
-          return;
-        }
         this._applyTranscriptUpdate(data);
       });
 
@@ -232,18 +197,10 @@ function appData() {
       this.socket.on('stream_finished', () => {
         this.streamUrl = '';
         this.recording = false;
-        // Keep fileStreamState === 'streaming' (Stop button stays visible)
-        // until audio actually finishes playing. State flips to 'done' only
-        // when the Audio element fires 'ended' — or immediately if no audio.
+        if (this.fileStreamState === 'streaming') this.fileStreamState = 'done';
         if (this._fileAudio) {
-          this._fileAudio.addEventListener('ended', () => {
-            this._stopTranscriptSync(true); // flush remainder
-            this._fileAudio = null;
-            this.fileStreamState = 'done';
-          }, { once: true });
-        } else {
-          this._stopTranscriptSync(true);
-          this.fileStreamState = 'done';
+          this._fileAudio.pause();
+          this._fileAudio = null;
         }
       });
 
@@ -369,10 +326,10 @@ function appData() {
       this.fileStreamState = 'streaming';
       this.rightTab = 'transcript';
 
-      // Play uploaded file through speakers; RAF loop syncs transcript display
+      // Play file through speakers — server streams to Deepgram at the same
+      // real-time rate, so transcripts arrive in sync with playback naturally.
       this._fileAudio = new Audio(`/files/${encodeURIComponent(this.uploadedFile.serverName)}`);
       this._fileAudio.play().catch(e => console.warn('[DG] audio playback failed:', e));
-      this._startTranscriptSync();
 
       this.socket.emit('start_file_streaming', {
         params: this.getCleanParams('streaming'),
@@ -381,7 +338,6 @@ function appData() {
     },
 
     stopFileStream() {
-      this._stopTranscriptSync(false); // discard queued — user stopped early
       if (this._fileAudio) {
         this._fileAudio.pause();
         this._fileAudio = null;
