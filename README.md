@@ -13,13 +13,51 @@ An interactive demo app for exploring Deepgram's real-time speech-to-text API. S
 - **Mic streaming** — Real-time transcription from your browser microphone using Deepgram's WebSocket API
 - **File streaming** — Upload an audio file and stream it to Deepgram in real-time, with transcript synced to playback
 - **Batch transcription** — Submit a file or URL for single-shot transcription via the REST API
+- **TTS Test mode** — Type any text, generate speech via Deepgram TTS, and transcribe it back through the STT pipeline. Ideal for testing redaction, formatting, and model behavior without a microphone
 - **Live params panel** — Toggle every major Deepgram option (model, language, smart format, VAD, endpointing, redaction, keyterms, and more) and see the URL update instantly
 - **Import / Export** — Paste a Deepgram WebSocket URL or JSON object to import settings; copy the current URL to share a configuration
 - **API responses tab** — Every WebSocket event (interim, final, metadata) logged with expandable JSON
 - **Error display** — Stream errors surfaced directly in the UI with a red badge in the responses tab
 
-<!-- TODO: add screenshot of file streaming mode -->
-<!-- ![Deepgram STT Explorer — File Streaming](docs/images/stt-file.png) -->
+---
+
+## TTS Test Mode
+
+The TTS Test tab lets you verify STT behavior end-to-end without a microphone. Type any text, choose a TTS voice, and click **Speak & Transcribe** — the app generates audio via Deepgram's TTS API and feeds it directly through the STT pipeline using your current param settings.
+
+After each run, a **TTS Comparison** panel shows:
+
+| Row | Description |
+|-----|-------------|
+| **Sent** | The original input text |
+| **Transcribed** | What the STT returned |
+| **Difference** | Word-level diff — deletions in ~~red~~, insertions in **green**, replacements as old→new |
+
+![Deepgram STT Explorer — TTS Test](docs/images/stt-tts.png)
+
+This is especially useful for testing redaction (does the PII actually get replaced?), smart formatting (are numbers and punctuation correct?), and model comparisons.
+
+### API endpoint
+
+The TTS→STT pipeline is also exposed as a REST endpoint for automated testing:
+
+```bash
+curl -s -X POST "https://deepgram-python-stt.fly.dev/api/tts-transcribe" \
+  -H "Content-Type: application/json" \
+  -d @- << 'EOF'
+{
+  "text": "My credit card is 4111 1111 1111 1111 and my SSN is 123-45-6789.",
+  "tts_model": "aura-2-asteria-en",
+  "stt_params": {
+    "model": "nova-3",
+    "redact": ["credit_card", "ssn"],
+    "smart_format": true
+  }
+}
+EOF
+```
+
+Response is the full Deepgram STT JSON object.
 
 ---
 
