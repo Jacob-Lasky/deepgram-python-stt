@@ -3,12 +3,12 @@ gsd_state_version: 1.0
 milestone: v2.0
 milestone_name: SDK Migration
 status: unknown
-last_updated: "2026-03-05T19:20:10.732Z"
+last_updated: "2026-03-06T15:08:37.375Z"
 progress:
-  total_phases: 4
+  total_phases: 5
   completed_phases: 4
-  total_plans: 7
-  completed_plans: 7
+  total_plans: 9
+  completed_plans: 8
 ---
 
 # Project State
@@ -22,12 +22,12 @@ See: .planning/PROJECT.md (updated 2026-03-05)
 
 ## Current Position
 
-Phase: 4 of 5 (File Streaming + Batch) — COMPLETE
-Plan: 2 of 2 in current phase — COMPLETE
-Status: Phase 4 complete — file streaming (WebSocket) and batch transcription (REST/httpx) both implemented
-Last activity: 2026-03-05 — Completed plan 04-02: /transcribe route implemented with httpx.AsyncClient, 28 tests pass
+Phase: 5 of 5 (Test Coverage + Deployment)
+Plan: 1 of 2 in current phase — COMPLETE
+Status: Phase 5 plan 01 complete — TEST-02 satisfied, 30 tests passing (28 existing + 2 new for audio handlers)
+Last activity: 2026-03-06 — Completed plan 05-01: detect_audio_settings and audio_stream SocketIO handler tests added
 
-Progress: [█████████░] 85%
+Progress: [█████████░] 90%
 
 ## Performance Metrics
 
@@ -49,6 +49,7 @@ Progress: [█████████░] 85%
 | Phase 03-deepgram-sdk-streaming P02 | 30 | 2 tasks | 1 files |
 | Phase 04-file-streaming-batch P01 | 8 | 2 tasks | 2 files |
 | Phase 04-file-streaming-batch P02 | 2 | 2 tasks | 2 files |
+| Phase 05-test-coverage-deployment P01 | 3 | 1 tasks | 1 files |
 
 ## Accumulated Context
 
@@ -82,6 +83,8 @@ Recent decisions affecting current work:
 - [Phase 04-02]: httpx used directly in app.py (import httpx added) — was previously only in tests; FILE-02 requires no requests library
 - [Phase 04-02]: Boolean params sent as lowercase strings ("true"/"false") in query_params to Deepgram REST API — same pattern as WebSocket SDK kwargs
 - [Phase 04-02]: test_transcribe_url_source_returns_non_501 makes real outbound HTTP call — validates wiring, accepts 401 (test-key) as valid non-stub behavior
+- [Phase 05-test-coverage-deployment]: detect_audio_settings test accepts any positive int (not hardcoded values) — CI has no audio hardware, fallback fires with defaults
+- [Phase 05-test-coverage-deployment]: audio_stream no-session test uses sleep+connected pattern because ws=None path drops silently with no response event
 
 ### Pending Todos
 
@@ -93,6 +96,6 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-03-05
-Stopped at: Completed 04-02-PLAN.md — FILE-02 implemented, 28 tests passing, Phase 4 complete
+Last session: 2026-03-06
+Stopped at: Completed 05-01-PLAN.md — TEST-02 satisfied, 30 tests passing (detect_audio_settings + audio_stream handlers covered)
 Resume file: None

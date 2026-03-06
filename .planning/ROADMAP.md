@@ -102,4 +102,4 @@ Plans:
 | 2. Async Test Infrastructure | 1/1 | Complete   | 2026-03-05 | - |
 | 3. Deepgram SDK Streaming | 2/2 | Complete   | 2026-03-05 | - |
 | 4. File Streaming + Batch | 2/2 | Complete | 2026-03-05 | - |
-| 5. Test Coverage + Deployment | v2.0 | 0/2 | Not started | - |
+| 5. Test Coverage + Deployment | 1/2 | In Progress|  | - |
