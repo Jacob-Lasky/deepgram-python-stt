@@ -71,7 +71,6 @@ function appData() {
       { value: 'name', label: 'Name' },
       { value: 'address', label: 'Address' },
       { value: 'dob', label: 'Date of Birth' },
-      { value: 'email', label: 'Email' },
       { value: 'phone', label: 'Phone' },
       { value: 'medical', label: 'Medical' },
       { value: 'username', label: 'Username' },
@@ -206,10 +205,19 @@ function appData() {
 
       this.socket.on('stream_error', (data) => {
         console.error('[DG] stream_error:', data.message);
+        // Stop MediaRecorder and release mic so next Start works cleanly
+        if (this.mediaRecorder && this.mediaRecorder.state !== 'inactive') this.mediaRecorder.stop();
+        if (this.micStream) { this.micStream.getTracks().forEach(t => t.stop()); this.micStream = null; }
+        this._streamReady = false;
+        this._pendingAudio = [];
         this.streamUrl = '';
         this.fileStreamState = 'error';
         this.recording = false;
         this.showToast(data.message || 'Stream error', 'error');
+        const msg = data.message || 'Stream error';
+        this.responses.push({ type: 'error', data: { message: msg }, timestamp: new Date().toLocaleTimeString(), preview: msg, open: true });
+        this.rightTab = 'responses';
+        this.$nextTick(() => { const el = this.$refs.responsesList; if (el) el.scrollTop = el.scrollHeight; });
       });
 
       this.socket.on('audio_settings', (data) => {

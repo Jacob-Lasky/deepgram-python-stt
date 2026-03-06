@@ -1,6 +1,7 @@
 import asyncio
 import logging
 import os
+import re
 import tempfile
 from pathlib import Path
 
@@ -39,6 +40,15 @@ fastapi_app.mount("/static", StaticFiles(directory="static"), name="static")
 
 # 3. Combined ASGI callable — THIS is what uvicorn serves, not fastapi_app
 app = socketio.ASGIApp(sio, fastapi_app)
+
+def _clean_error(e: Exception) -> str:
+    """Strip SDK request headers (including auth token) from Deepgram exception messages."""
+    msg = str(e)
+    m = re.search(r'status_code:\s*(\d+),\s*body:\s*(.+)$', msg, re.DOTALL)
+    if m:
+        return f"Deepgram {m.group(1)}: {m.group(2).strip()}"
+    return msg
+
 
 # Per-session state — module-level dict, not sio.session() (too slow for audio hot path)
 # Key: SocketIO session id (sid)
@@ -206,6 +216,8 @@ async def streaming_task(sid: str, params: dict, stop_event: asyncio.Event) -> N
 
     except Exception as e:
         logger.error("[%s] streaming_task error: %s", sid, e)
+        _sessions.pop(sid, None)  # Free slot before notifying client so retries aren't blocked
+        await sio.emit("stream_error", {"message": _clean_error(e)}, to=sid)
     finally:
         request_id = _sessions[sid].get("request_id") if sid in _sessions else None
         await sio.emit("stream_finished", {"request_id": request_id}, to=sid)
@@ -299,6 +311,8 @@ async def file_streaming_task(
 
     except Exception as e:
         logger.error("[%s] file_streaming_task error: %s", sid, e)
+        _sessions.pop(sid, None)
+        await sio.emit("stream_error", {"message": _clean_error(e)}, to=sid)
     finally:
         request_id = _sessions[sid].get("request_id") if sid in _sessions else None
         await sio.emit("stream_finished", {"request_id": request_id}, to=sid)
