@@ -80,19 +80,23 @@ async def serve_file(filename: str):
     return FileResponse(path)
 
 
-@fastapi_app.post("/api/tts-transcribe")
-async def tts_transcribe(request: Request):
-    body = await request.json()
-    text = body.get("text", "").strip()
-    tts_model = body.get("tts_model", "aura-2-asteria-en")
-    stt_params = body.get("stt_params", {})
-
-    if not text:
-        return JSONResponse({"error": "text is required"}, status_code=400)
-
-    api_key = os.getenv("DEEPGRAM_API_KEY", "")
+async def _tts_generate(text: str, tts_model: str, api_key: str) -> bytes:
+    """Call Deepgram TTS and return MP3 bytes."""
     headers = {"Authorization": f"Token {api_key}"}
+    async with httpx.AsyncClient(timeout=60.0) as client:
+        resp = await client.post(
+            "https://api.deepgram.com/v1/speak",
+            headers={**headers, "Content-Type": "application/json"},
+            params={"model": tts_model, "encoding": "mp3"},
+            json={"text": text},
+        )
+        resp.raise_for_status()
+        return resp.content
 
+
+async def _stt_batch(audio_bytes: bytes, stt_params: dict, api_key: str) -> dict:
+    """Transcribe audio bytes via Deepgram pre-recorded (batch) API."""
+    headers = {"Authorization": f"Token {api_key}"}
     clean = clean_params(stt_params, Mode.BATCH)
     query_params = {}
     for k, v in clean.items():
@@ -104,31 +108,101 @@ async def tts_transcribe(request: Request):
             query_params[k] = str(v)
     query_params.setdefault("model", "nova-2")
 
-    try:
+    async with httpx.AsyncClient(timeout=60.0) as client:
+        resp = await client.post(
+            "https://api.deepgram.com/v1/listen",
+            headers={**headers, "Content-Type": "audio/mp3"},
+            params=query_params,
+            content=audio_bytes,
+        )
+        resp.raise_for_status()
+        return resp.json()
+
+
+async def _stt_streaming(text: str, tts_model: str, stt_params: dict, api_key: str) -> dict:
+    """Pipe Deepgram TTS streaming response directly into the STT WebSocket.
+    TTS audio chunks are forwarded to STT as they arrive — naturally paced at
+    speech speed, no buffering or artificial timing needed.
+    Returns {"transcript": str, "segments": list}.
+    """
+    dg = AsyncDeepgramClient(api_key=api_key)
+    sdk_kwargs = _params_to_sdk_kwargs(stt_params)
+    headers = {"Authorization": f"Token {api_key}"}
+
+    segments = []
+
+    async with dg.listen.v1.connect(**sdk_kwargs) as ws:
+        async def on_message(msg, **kwargs):
+            if isinstance(msg, ListenV1Results) and bool(msg.is_final):
+                t = msg.channel.alternatives[0].transcript
+                if t.strip():
+                    segments.append(t)
+
+        ws.on(EventType.MESSAGE, on_message)
+        listen_task = asyncio.create_task(ws.start_listening())
+
+        # Stream TTS audio directly into STT WebSocket as chunks arrive
         async with httpx.AsyncClient(timeout=60.0) as client:
-            # Step 1: TTS — convert text to MP3
-            tts_resp = await client.post(
+            async with client.stream(
+                "POST",
                 "https://api.deepgram.com/v1/speak",
                 headers={**headers, "Content-Type": "application/json"},
                 params={"model": tts_model, "encoding": "mp3"},
                 json={"text": text},
-            )
-            tts_resp.raise_for_status()
-            audio_bytes = tts_resp.content
+            ) as tts_resp:
+                tts_resp.raise_for_status()
+                async for chunk in tts_resp.aiter_bytes(chunk_size=4096):
+                    await ws.send_media(chunk)
 
-            # Step 2: STT — transcribe the generated audio
-            stt_resp = await client.post(
-                "https://api.deepgram.com/v1/listen",
-                headers={**headers, "Content-Type": "audio/mp3"},
-                params=query_params,
-                content=audio_bytes,
+        await ws.send_close_stream()
+        await listen_task
+
+    return {
+        "transcript": " ".join(segments),
+        "segments": segments,
+    }
+
+
+@fastapi_app.post("/api/tts-transcribe")
+async def tts_transcribe(request: Request):
+    body = await request.json()
+    text = body.get("text", "").strip()
+    tts_model = body.get("tts_model", "aura-2-asteria-en")
+    stt_params = body.get("stt_params", {})
+    mode = body.get("mode", "batch")  # "batch" | "streaming" | "both"
+
+    if not text:
+        return JSONResponse({"error": "text is required"}, status_code=400)
+    if mode not in ("batch", "streaming", "both"):
+        return JSONResponse({"error": "mode must be batch, streaming, or both"}, status_code=400)
+
+    api_key = os.getenv("DEEPGRAM_API_KEY", "")
+
+    try:
+        if mode == "batch":
+            audio_bytes = await _tts_generate(text, tts_model, api_key)
+            result = await _stt_batch(audio_bytes, stt_params, api_key)
+            return JSONResponse(result)
+
+        elif mode == "streaming":
+            result = await _stt_streaming(text, tts_model, stt_params, api_key)
+            return JSONResponse(result)
+
+        else:  # both — batch buffers TTS bytes, streaming pipes TTS live; run in parallel
+            async def _batch_pipeline():
+                audio_bytes = await _tts_generate(text, tts_model, api_key)
+                return await _stt_batch(audio_bytes, stt_params, api_key)
+
+            batch_result, stream_result = await asyncio.gather(
+                _batch_pipeline(),
+                _stt_streaming(text, tts_model, stt_params, api_key),
             )
-            stt_resp.raise_for_status()
-            return JSONResponse(stt_resp.json())
+            return JSONResponse({"batch": batch_result, "streaming": stream_result})
+
     except httpx.HTTPStatusError as e:
         return JSONResponse({"error": str(e)}, status_code=e.response.status_code)
     except Exception as e:
-        return JSONResponse({"error": str(e)}, status_code=500)
+        return JSONResponse({"error": _clean_error(e)}, status_code=500)
 
 
 @fastapi_app.post("/transcribe")

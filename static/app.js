@@ -27,10 +27,12 @@ function appData() {
     // TTS Test
     ttsText: '',
     ttsModel: 'aura-2-asteria-en',
+    ttsMode: 'batch',   // 'batch' | 'streaming' | 'both'
     ttsLoading: false,
     ttsResult: null,
     ttsLastText: '',
     ttsLastTranscript: '',
+    ttsLastStreamTranscript: '',
 
     // Transcript
     finalTranscript: '',
@@ -443,6 +445,7 @@ function appData() {
           body: JSON.stringify({
             text: this.ttsText,
             tts_model: this.ttsModel,
+            mode: this.ttsMode,
             stt_params: this.getCleanParams('batch'),
           }),
         });
@@ -450,11 +453,20 @@ function appData() {
         if (data.error) throw new Error(data.error);
         this.ttsResult = data;
 
-        const transcript = this.extractBatchTranscript(data);
-        this.ttsLastText = this.ttsText;
-        this.ttsLastTranscript = transcript || '';
-        if (transcript) {
-          this.finalTranscript += this.escapeHtml(transcript) + '\n';
+        // Extract transcripts based on mode
+        const batchSrc  = this.ttsMode === 'both' ? data.batch   : (this.ttsMode === 'batch'     ? data : null);
+        const streamSrc = this.ttsMode === 'both' ? data.streaming : (this.ttsMode === 'streaming' ? data : null);
+
+        const batchTranscript  = batchSrc  ? this.extractBatchTranscript(batchSrc)  : '';
+        const streamTranscript = streamSrc ? (streamSrc.transcript || '')            : '';
+
+        this.ttsLastText             = this.ttsText;
+        this.ttsLastTranscript       = batchTranscript || streamTranscript;
+        this.ttsLastStreamTranscript = streamTranscript;
+
+        const display = batchTranscript || streamTranscript;
+        if (display) {
+          this.finalTranscript += this.escapeHtml(display) + '\n';
         }
         this.addResponse('final', data);
         this.rightTab = 'transcript';
