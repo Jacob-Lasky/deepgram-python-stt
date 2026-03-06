@@ -37,11 +37,5 @@ EXPOSE 8080
 ENV PYTHONPATH=/app
 ENV PORT=8080
 
-# Run with gunicorn + geventwebsocket worker for Flask-SocketIO in production
-# Single worker required: Flask-SocketIO manages its own connection state per process
-CMD ["uv", "run", "gunicorn", \
-     "--worker-class", "geventwebsocket.gunicorn.workers.GeventWebSocketWorker", \
-     "--workers", "1", \
-     "--bind", "0.0.0.0:8080", \
-     "--timeout", "120", \
-     "app:app"]
+# Single worker required: python-socketio uses in-memory session state per process
+CMD ["uv", "run", "uvicorn", "app:app", "--host", "0.0.0.0", "--port", "8080", "--workers", "1"]

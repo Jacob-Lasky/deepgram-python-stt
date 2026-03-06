@@ -17,6 +17,7 @@ function appData() {
     // File streaming
     uploadedFile: null,      // { name, serverName, size }
     fileStreamState: 'idle', // 'idle' | 'streaming' | 'done' | 'error'
+    _fileAudio: null,        // Audio element for file playback
 
     // Batch
     batchSource: '',
@@ -65,14 +66,17 @@ function appData() {
     redactOptions: [
       { value: 'pci', label: 'PCI' },
       { value: 'ssn', label: 'SSN' },
+      { value: 'credit_card', label: 'Credit Card' },
+      { value: 'account_number', label: 'Account #' },
+      { value: 'routing_number', label: 'Routing #' },
+      { value: 'passport_number', label: 'Passport' },
+      { value: 'driver_license', label: 'Driver License' },
+      { value: 'numerical_pii', label: 'Numerical PII' },
       { value: 'numbers', label: 'Numbers' },
       { value: 'aggressive_numbers', label: 'Aggressive Nums' },
+      { value: 'phi', label: 'PHI' },
       { value: 'name', label: 'Name' },
-      { value: 'address', label: 'Address' },
       { value: 'dob', label: 'Date of Birth' },
-      { value: 'email', label: 'Email' },
-      { value: 'phone', label: 'Phone' },
-      { value: 'medical', label: 'Medical' },
       { value: 'username', label: 'Username' },
     ],
 
@@ -140,6 +144,30 @@ function appData() {
       this.refreshUrl();
     },
 
+    // ---- Transcript helpers ----
+    _applyTranscriptUpdate(data) {
+      const text = data.transcript || '';
+      const prefix = (data.speaker != null) ? `<span class="speaker-label">[Speaker ${data.speaker}]</span> ` : '';
+      if (data.is_final) {
+        this.interimTranscript = '';
+        if (text.trim()) {
+          this.finalTranscript += prefix + this.escapeHtml(text) + '\n';
+          this.$nextTick(() => {
+            const el = this.$refs.transcriptFinal;
+            if (el) el.scrollTop = el.scrollHeight;
+          });
+          this._logDebug('final', (data.speaker != null ? `[Speaker ${data.speaker}] ` : '') + text);
+        }
+        this.addResponse('final', data);
+      } else {
+        this.interimTranscript = (data.speaker != null ? `[Speaker ${data.speaker}] ` : '') + text;
+        if (text.trim()) {
+          this._logDebug('interim', (data.speaker != null ? `[Speaker ${data.speaker}] ` : '') + text);
+        }
+        this.addResponse('interim', data);
+      }
+    },
+
     // ---- SocketIO ----
     setupSocket() {
       this.socket = io(window.location.origin, { transports: ['websocket', 'polling'] });
@@ -155,27 +183,7 @@ function appData() {
       });
 
       this.socket.on('transcription_update', (data) => {
-        const text = data.transcript || '';
-        const prefix = (data.speaker != null) ? `<span class="speaker-label">[Speaker ${data.speaker}]</span> ` : '';
-
-        if (data.is_final) {
-          this.interimTranscript = '';
-          if (text.trim()) {
-            this.finalTranscript += prefix + this.escapeHtml(text) + '\n';
-            this.$nextTick(() => {
-              const el = this.$refs.transcriptFinal;
-              if (el) el.scrollTop = el.scrollHeight;
-            });
-            this._logDebug('final', (data.speaker != null ? `[Speaker ${data.speaker}] ` : '') + text);
-          }
-          this.addResponse('final', data);
-        } else {
-          this.interimTranscript = (data.speaker != null ? `[Speaker ${data.speaker}] ` : '') + text;
-          if (text.trim()) {
-            this._logDebug('interim', (data.speaker != null ? `[Speaker ${data.speaker}] ` : '') + text);
-          }
-          this.addResponse('interim', data);
-        }
+        this._applyTranscriptUpdate(data);
       });
 
       this.socket.on('stream_started', (data) => {
@@ -191,16 +199,29 @@ function appData() {
 
       this.socket.on('stream_finished', () => {
         this.streamUrl = '';
-        if (this.fileStreamState === 'streaming') this.fileStreamState = 'done';
         this.recording = false;
+        if (this.fileStreamState === 'streaming') this.fileStreamState = 'done';
+        if (this._fileAudio) {
+          this._fileAudio.pause();
+          this._fileAudio = null;
+        }
       });
 
       this.socket.on('stream_error', (data) => {
         console.error('[DG] stream_error:', data.message);
+        // Stop MediaRecorder and release mic so next Start works cleanly
+        if (this.mediaRecorder && this.mediaRecorder.state !== 'inactive') this.mediaRecorder.stop();
+        if (this.micStream) { this.micStream.getTracks().forEach(t => t.stop()); this.micStream = null; }
+        this._streamReady = false;
+        this._pendingAudio = [];
         this.streamUrl = '';
         this.fileStreamState = 'error';
         this.recording = false;
         this.showToast(data.message || 'Stream error', 'error');
+        const msg = data.message || 'Stream error';
+        this.responses.push({ type: 'error', data: { message: msg }, timestamp: new Date().toLocaleTimeString(), preview: msg, open: true });
+        this.rightTab = 'responses';
+        this.$nextTick(() => { const el = this.$refs.responsesList; if (el) el.scrollTop = el.scrollHeight; });
       });
 
       this.socket.on('audio_settings', (data) => {
@@ -212,6 +233,10 @@ function appData() {
 
     // ---- Mode switch ----
     setMode(m) {
+      // Stop any active file stream before switching tabs
+      if (m !== 'file' && this.fileStreamState === 'streaming') {
+        this.stopFileStream();
+      }
       this.mode = m;
       if (m !== 'batch') {
         this.rightTab = 'transcript';
@@ -312,6 +337,12 @@ function appData() {
       if (!this.uploadedFile) return;
       this.fileStreamState = 'streaming';
       this.rightTab = 'transcript';
+
+      // Play file through speakers — server streams to Deepgram at the same
+      // real-time rate, so transcripts arrive in sync with playback naturally.
+      this._fileAudio = new Audio(`/files/${encodeURIComponent(this.uploadedFile.serverName)}`);
+      this._fileAudio.play().catch(e => console.warn('[DG] audio playback failed:', e));
+
       this.socket.emit('start_file_streaming', {
         params: this.getCleanParams('streaming'),
         filename: this.uploadedFile.serverName,
@@ -319,6 +350,10 @@ function appData() {
     },
 
     stopFileStream() {
+      if (this._fileAudio) {
+        this._fileAudio.pause();
+        this._fileAudio = null;
+      }
       this.socket.emit('stop_file_streaming', {});
       this.fileStreamState = 'idle';
       this.streamUrl = '';
