@@ -94,6 +94,25 @@ async def _tts_generate(text: str, tts_model: str, api_key: str) -> bytes:
         return resp.content
 
 
+async def _elevenlabs_tts_generate(text: str, voice_id: str, api_key: str) -> bytes:
+    """Call ElevenLabs TTS and return MP3 bytes."""
+    async with httpx.AsyncClient(timeout=60.0) as client:
+        resp = await client.post(
+            f"https://api.elevenlabs.io/v1/text-to-speech/{voice_id}",
+            headers={
+                "xi-api-key": api_key,
+                "Content-Type": "application/json",
+                "Accept": "audio/mpeg",
+            },
+            json={
+                "text": text,
+                "model_id": "eleven_multilingual_v2",
+            },
+        )
+        resp.raise_for_status()
+        return resp.content
+
+
 async def _stt_batch(audio_bytes: bytes, stt_params: dict, api_key: str) -> dict:
     """Transcribe audio bytes via Deepgram pre-recorded (batch) API."""
     headers = {"Authorization": f"Token {api_key}"}
@@ -163,11 +182,54 @@ async def _stt_streaming(text: str, tts_model: str, stt_params: dict, api_key: s
     }
 
 
+@fastapi_app.get("/api/tts-voices")
+async def tts_voices(provider: str = "elevenlabs"):
+    """Return available voices for a TTS provider."""
+    if provider == "elevenlabs":
+        api_key = os.getenv("ELEVENLABS_API_KEY", "")
+        if not api_key:
+            return JSONResponse({"error": "ELEVENLABS_API_KEY not set"}, status_code=500)
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            resp = await client.get(
+                "https://api.elevenlabs.io/v1/voices",
+                headers={"xi-api-key": api_key},
+            )
+            resp.raise_for_status()
+            data = resp.json()
+        voices = [
+            {
+                "voice_id": v["voice_id"],
+                "name": v["name"],
+                "accent": v.get("labels", {}).get("accent", ""),
+                "gender": v.get("labels", {}).get("gender", ""),
+                "age": v.get("labels", {}).get("age", ""),
+                "description": v.get("labels", {}).get("description", ""),
+                "use_case": v.get("labels", {}).get("use_case", ""),
+            }
+            for v in data.get("voices", [])
+        ]
+        return JSONResponse({"voices": voices})
+    return JSONResponse({"error": f"Unknown provider: {provider}"}, status_code=400)
+
+
+async def _generate_tts_audio(text: str, tts_model: str, provider: str) -> bytes:
+    """Route TTS generation to the correct provider."""
+    if provider == "elevenlabs":
+        api_key = os.getenv("ELEVENLABS_API_KEY", "")
+        if not api_key:
+            raise ValueError("ELEVENLABS_API_KEY not set")
+        return await _elevenlabs_tts_generate(text, tts_model, api_key)
+    else:
+        api_key = os.getenv("DEEPGRAM_API_KEY", "")
+        return await _tts_generate(text, tts_model, api_key)
+
+
 @fastapi_app.post("/api/tts-transcribe")
 async def tts_transcribe(request: Request):
     body = await request.json()
     text = body.get("text", "").strip()
     tts_model = body.get("tts_model", "aura-2-asteria-en")
+    tts_provider = body.get("tts_provider", "deepgram")
     stt_params = body.get("stt_params", {})
     mode = body.get("mode", "batch")  # "batch" | "streaming" | "both"
 
@@ -180,17 +242,29 @@ async def tts_transcribe(request: Request):
 
     try:
         if mode == "batch":
-            audio_bytes = await _tts_generate(text, tts_model, api_key)
+            audio_bytes = await _generate_tts_audio(text, tts_model, tts_provider)
             result = await _stt_batch(audio_bytes, stt_params, api_key)
             return JSONResponse(result)
 
         elif mode == "streaming":
+            if tts_provider == "elevenlabs":
+                # ElevenLabs doesn't integrate with Deepgram streaming pipe,
+                # so generate full audio first, then stream it to STT
+                audio_bytes = await _generate_tts_audio(text, tts_model, tts_provider)
+                result = await _stt_batch(audio_bytes, stt_params, api_key)
+                return JSONResponse(result)
             result = await _stt_streaming(text, tts_model, stt_params, api_key)
             return JSONResponse(result)
 
-        else:  # both — batch buffers TTS bytes, streaming pipes TTS live; run in parallel
+        else:  # both
+            if tts_provider == "elevenlabs":
+                # Can't do streaming pipe with ElevenLabs, run batch only
+                audio_bytes = await _generate_tts_audio(text, tts_model, tts_provider)
+                result = await _stt_batch(audio_bytes, stt_params, api_key)
+                return JSONResponse(result)
+
             async def _batch_pipeline():
-                audio_bytes = await _tts_generate(text, tts_model, api_key)
+                audio_bytes = await _generate_tts_audio(text, tts_model, tts_provider)
                 return await _stt_batch(audio_bytes, stt_params, api_key)
 
             batch_result, stream_result = await asyncio.gather(

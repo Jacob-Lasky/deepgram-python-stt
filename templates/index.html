@@ -1097,8 +1097,28 @@
                     style="resize:vertical;min-height:80px;font-family:inherit;"></textarea>
                 </div>
                 <div class="field">
-                  <div class="field-label">TTS Voice</div>
-                  <input class="field-input" x-model="ttsModel" placeholder="aura-2-asteria-en">
+                  <div class="field-label">Language</div>
+                  <div style="display:flex;gap:3px;flex-wrap:wrap;">
+                    <template x-for="l in dgVoiceLangs" :key="l.code">
+                      <button class="action-btn btn-sm"
+                        :class="ttsLang === l.code ? 'btn-primary' : 'btn-secondary'"
+                        style="padding:3px 8px;font-size:12px;"
+                        @click="switchTtsLang(l.code)"
+                        x-text="l.label">
+                      </button>
+                    </template>
+                  </div>
+                </div>
+                <div class="field">
+                  <div class="field-label">Voice</div>
+                  <select class="field-input" x-model="ttsModel"
+                    style="background:#111827;color:#e5e7eb;border:1px solid #374151;padding:6px 8px;border-radius:6px;">
+                    <template x-for="v in filteredDgVoices()" :key="v.id">
+                      <option :value="v.id"
+                        x-text="`${v.name} (${v.accent}, ${v.gender === 'M' ? 'Male' : v.gender === 'F' ? 'Female' : v.gender})`">
+                      </option>
+                    </template>
+                  </select>
                 </div>
                 <div class="field">
                   <div class="field-label">STT Mode</div>
@@ -1114,7 +1134,7 @@
                   </div>
                 </div>
                 <button class="action-btn btn-primary"
-                  :disabled="ttsLoading || !ttsText.trim()"
+                  :disabled="ttsLoading || !ttsText.trim() || !ttsModel"
                   @click="runTts()">
                   <i :class="ttsLoading ? 'fas fa-spinner fa-spin' : 'fas fa-comment-dots'"></i>
                   <span x-text="ttsLoading ? 'Generating...' : 'Speak & Transcribe'"></span>

@@ -26,13 +26,132 @@ function appData() {
 
     // TTS Test
     ttsText: '',
+    ttsProvider: 'deepgram',  // 'deepgram' | 'elevenlabs'
     ttsModel: 'aura-2-asteria-en',
+    ttsLang: 'en',
     ttsMode: 'batch',   // 'batch' | 'streaming' | 'both'
     ttsLoading: false,
     ttsResult: null,
     ttsLastText: '',
     ttsLastTranscript: '',
     ttsLastStreamTranscript: '',
+    // ElevenLabs voices cache
+    elevenVoices: [],
+    elevenVoicesLoading: false,
+
+    // Deepgram Aura-2 voices grouped by language
+    dgVoiceLangs: [
+      { code: 'en', label: 'English' },
+      { code: 'es', label: 'Spanish' },
+      { code: 'de', label: 'German' },
+      { code: 'fr', label: 'French' },
+      { code: 'it', label: 'Italian' },
+      { code: 'nl', label: 'Dutch' },
+      { code: 'ja', label: 'Japanese' },
+    ],
+    dgVoices: [
+      // English — American
+      { id: 'aura-2-asteria-en', name: 'Asteria', gender: 'F', accent: 'American', lang: 'en' },
+      { id: 'aura-2-andromeda-en', name: 'Andromeda', gender: 'F', accent: 'American', lang: 'en' },
+      { id: 'aura-2-apollo-en', name: 'Apollo', gender: 'M', accent: 'American', lang: 'en' },
+      { id: 'aura-2-arcas-en', name: 'Arcas', gender: 'M', accent: 'American', lang: 'en' },
+      { id: 'aura-2-aries-en', name: 'Aries', gender: 'M', accent: 'American', lang: 'en' },
+      { id: 'aura-2-athena-en', name: 'Athena', gender: 'F', accent: 'American', lang: 'en' },
+      { id: 'aura-2-atlas-en', name: 'Atlas', gender: 'M', accent: 'American', lang: 'en' },
+      { id: 'aura-2-aurora-en', name: 'Aurora', gender: 'F', accent: 'American', lang: 'en' },
+      { id: 'aura-2-callista-en', name: 'Callista', gender: 'F', accent: 'American', lang: 'en' },
+      { id: 'aura-2-cora-en', name: 'Cora', gender: 'F', accent: 'American', lang: 'en' },
+      { id: 'aura-2-cordelia-en', name: 'Cordelia', gender: 'F', accent: 'American', lang: 'en' },
+      { id: 'aura-2-delia-en', name: 'Delia', gender: 'F', accent: 'American', lang: 'en' },
+      { id: 'aura-2-electra-en', name: 'Electra', gender: 'F', accent: 'American', lang: 'en' },
+      { id: 'aura-2-harmonia-en', name: 'Harmonia', gender: 'F', accent: 'American', lang: 'en' },
+      { id: 'aura-2-helena-en', name: 'Helena', gender: 'F', accent: 'American', lang: 'en' },
+      { id: 'aura-2-hera-en', name: 'Hera', gender: 'F', accent: 'American', lang: 'en' },
+      { id: 'aura-2-hermes-en', name: 'Hermes', gender: 'M', accent: 'American', lang: 'en' },
+      { id: 'aura-2-iris-en', name: 'Iris', gender: 'F', accent: 'American', lang: 'en' },
+      { id: 'aura-2-juno-en', name: 'Juno', gender: 'F', accent: 'American', lang: 'en' },
+      { id: 'aura-2-jupiter-en', name: 'Jupiter', gender: 'M', accent: 'American', lang: 'en' },
+      { id: 'aura-2-luna-en', name: 'Luna', gender: 'F', accent: 'American', lang: 'en' },
+      { id: 'aura-2-mars-en', name: 'Mars', gender: 'M', accent: 'American', lang: 'en' },
+      { id: 'aura-2-minerva-en', name: 'Minerva', gender: 'F', accent: 'American', lang: 'en' },
+      { id: 'aura-2-neptune-en', name: 'Neptune', gender: 'M', accent: 'American', lang: 'en' },
+      { id: 'aura-2-odysseus-en', name: 'Odysseus', gender: 'M', accent: 'American', lang: 'en' },
+      { id: 'aura-2-ophelia-en', name: 'Ophelia', gender: 'F', accent: 'American', lang: 'en' },
+      { id: 'aura-2-orion-en', name: 'Orion', gender: 'M', accent: 'American', lang: 'en' },
+      { id: 'aura-2-orpheus-en', name: 'Orpheus', gender: 'M', accent: 'American', lang: 'en' },
+      { id: 'aura-2-phoebe-en', name: 'Phoebe', gender: 'F', accent: 'American', lang: 'en' },
+      { id: 'aura-2-pluto-en', name: 'Pluto', gender: 'M', accent: 'American', lang: 'en' },
+      { id: 'aura-2-saturn-en', name: 'Saturn', gender: 'M', accent: 'American', lang: 'en' },
+      { id: 'aura-2-selene-en', name: 'Selene', gender: 'F', accent: 'American', lang: 'en' },
+      { id: 'aura-2-thalia-en', name: 'Thalia', gender: 'F', accent: 'American', lang: 'en' },
+      { id: 'aura-2-zeus-en', name: 'Zeus', gender: 'M', accent: 'American', lang: 'en' },
+      // English — Southern US
+      { id: 'aura-2-janus-en', name: 'Janus', gender: 'F', accent: 'Southern US', lang: 'en' },
+      // English — Filipino
+      { id: 'aura-2-amalthea-en', name: 'Amalthea', gender: 'F', accent: 'Filipino', lang: 'en' },
+      // English — British
+      { id: 'aura-2-draco-en', name: 'Draco', gender: 'M', accent: 'British', lang: 'en' },
+      { id: 'aura-2-pandora-en', name: 'Pandora', gender: 'F', accent: 'British', lang: 'en' },
+      // English — Australian
+      { id: 'aura-2-hyperion-en', name: 'Hyperion', gender: 'M', accent: 'Australian', lang: 'en' },
+      { id: 'aura-2-theia-en', name: 'Theia', gender: 'F', accent: 'Australian', lang: 'en' },
+      // Spanish
+      { id: 'aura-2-estrella-es', name: 'Estrella', gender: 'F', accent: 'Mexican', lang: 'es' },
+      { id: 'aura-2-sirio-es', name: 'Sirio', gender: 'M', accent: 'Mexican', lang: 'es' },
+      { id: 'aura-2-javier-es', name: 'Javier', gender: 'M', accent: 'Mexican', lang: 'es' },
+      { id: 'aura-2-luciano-es', name: 'Luciano', gender: 'M', accent: 'Mexican', lang: 'es' },
+      { id: 'aura-2-olivia-es', name: 'Olivia', gender: 'F', accent: 'Mexican', lang: 'es' },
+      { id: 'aura-2-valerio-es', name: 'Valerio', gender: 'M', accent: 'Mexican', lang: 'es' },
+      { id: 'aura-2-nestor-es', name: 'Nestor', gender: 'M', accent: 'Peninsular', lang: 'es' },
+      { id: 'aura-2-carina-es', name: 'Carina', gender: 'F', accent: 'Peninsular', lang: 'es' },
+      { id: 'aura-2-alvaro-es', name: 'Alvaro', gender: 'M', accent: 'Peninsular', lang: 'es' },
+      { id: 'aura-2-diana-es', name: 'Diana', gender: 'F', accent: 'Peninsular', lang: 'es' },
+      { id: 'aura-2-agustina-es', name: 'Agustina', gender: 'F', accent: 'Peninsular', lang: 'es' },
+      { id: 'aura-2-silvia-es', name: 'Silvia', gender: 'F', accent: 'Peninsular', lang: 'es' },
+      { id: 'aura-2-celeste-es', name: 'Celeste', gender: 'F', accent: 'Colombian', lang: 'es' },
+      { id: 'aura-2-gloria-es', name: 'Gloria', gender: 'F', accent: 'Colombian', lang: 'es' },
+      { id: 'aura-2-antonia-es', name: 'Antonia', gender: 'F', accent: 'Argentine', lang: 'es' },
+      { id: 'aura-2-aquila-es', name: 'Aquila', gender: 'M', accent: 'Latin American', lang: 'es' },
+      { id: 'aura-2-selena-es', name: 'Selena', gender: 'F', accent: 'Latin American', lang: 'es' },
+      // German
+      { id: 'aura-2-julius-de', name: 'Julius', gender: 'M', accent: 'German', lang: 'de' },
+      { id: 'aura-2-viktoria-de', name: 'Viktoria', gender: 'F', accent: 'German', lang: 'de' },
+      { id: 'aura-2-elara-de', name: 'Elara', gender: 'F', accent: 'German', lang: 'de' },
+      { id: 'aura-2-aurelia-de', name: 'Aurelia', gender: 'F', accent: 'German', lang: 'de' },
+      { id: 'aura-2-lara-de', name: 'Lara', gender: 'F', accent: 'German', lang: 'de' },
+      { id: 'aura-2-fabian-de', name: 'Fabian', gender: 'M', accent: 'German', lang: 'de' },
+      { id: 'aura-2-kara-de', name: 'Kara', gender: 'F', accent: 'German', lang: 'de' },
+      // French
+      { id: 'aura-2-agathe-fr', name: 'Agathe', gender: 'F', accent: 'French', lang: 'fr' },
+      { id: 'aura-2-hector-fr', name: 'Hector', gender: 'M', accent: 'French', lang: 'fr' },
+      // Italian
+      { id: 'aura-2-livia-it', name: 'Livia', gender: 'F', accent: 'Italian', lang: 'it' },
+      { id: 'aura-2-dionisio-it', name: 'Dionisio', gender: 'M', accent: 'Italian', lang: 'it' },
+      { id: 'aura-2-melia-it', name: 'Melia', gender: 'F', accent: 'Italian', lang: 'it' },
+      { id: 'aura-2-elio-it', name: 'Elio', gender: 'M', accent: 'Italian', lang: 'it' },
+      { id: 'aura-2-flavio-it', name: 'Flavio', gender: 'M', accent: 'Italian', lang: 'it' },
+      { id: 'aura-2-maia-it', name: 'Maia', gender: 'F', accent: 'Italian', lang: 'it' },
+      { id: 'aura-2-cinzia-it', name: 'Cinzia', gender: 'F', accent: 'Italian', lang: 'it' },
+      { id: 'aura-2-cesare-it', name: 'Cesare', gender: 'M', accent: 'Italian', lang: 'it' },
+      { id: 'aura-2-perseo-it', name: 'Perseo', gender: 'M', accent: 'Italian', lang: 'it' },
+      { id: 'aura-2-demetra-it', name: 'Demetra', gender: 'F', accent: 'Italian', lang: 'it' },
+      // Dutch
+      { id: 'aura-2-rhea-nl', name: 'Rhea', gender: 'F', accent: 'Dutch', lang: 'nl' },
+      { id: 'aura-2-sander-nl', name: 'Sander', gender: 'M', accent: 'Dutch', lang: 'nl' },
+      { id: 'aura-2-beatrix-nl', name: 'Beatrix', gender: 'F', accent: 'Dutch', lang: 'nl' },
+      { id: 'aura-2-daphne-nl', name: 'Daphne', gender: 'F', accent: 'Dutch', lang: 'nl' },
+      { id: 'aura-2-cornelia-nl', name: 'Cornelia', gender: 'F', accent: 'Dutch', lang: 'nl' },
+      { id: 'aura-2-hestia-nl', name: 'Hestia', gender: 'F', accent: 'Dutch', lang: 'nl' },
+      { id: 'aura-2-lars-nl', name: 'Lars', gender: 'M', accent: 'Dutch', lang: 'nl' },
+      { id: 'aura-2-roman-nl', name: 'Roman', gender: 'M', accent: 'Dutch', lang: 'nl' },
+      { id: 'aura-2-leda-nl', name: 'Leda', gender: 'F', accent: 'Dutch', lang: 'nl' },
+      // Japanese
+      { id: 'aura-2-fujin-ja', name: 'Fujin', gender: 'M', accent: 'Japanese', lang: 'ja' },
+      { id: 'aura-2-izanami-ja', name: 'Izanami', gender: 'F', accent: 'Japanese', lang: 'ja' },
+      { id: 'aura-2-uzume-ja', name: 'Uzume', gender: 'F', accent: 'Japanese', lang: 'ja' },
+      { id: 'aura-2-ebisu-ja', name: 'Ebisu', gender: 'M', accent: 'Japanese', lang: 'ja' },
+      { id: 'aura-2-ama-ja', name: 'Ama', gender: 'F', accent: 'Japanese', lang: 'ja' },
+    ],
 
     // Transcript
     finalTranscript: '',
@@ -432,6 +551,47 @@ function appData() {
       }
     },
 
+    filteredDgVoices() {
+      return this.dgVoices.filter(v => v.lang === this.ttsLang);
+    },
+
+    switchTtsLang(lang) {
+      this.ttsLang = lang;
+      const voices = this.dgVoices.filter(v => v.lang === lang);
+      if (voices.length && !voices.find(v => v.id === this.ttsModel)) {
+        this.ttsModel = voices[0].id;
+      }
+    },
+
+    async loadElevenVoices() {
+      if (this.elevenVoices.length > 0) return;
+      this.elevenVoicesLoading = true;
+      try {
+        const res = await fetch('/api/tts-voices?provider=elevenlabs');
+        const data = await res.json();
+        if (data.error) throw new Error(data.error);
+        this.elevenVoices = data.voices || [];
+      } catch (err) {
+        this.showToast('Failed to load ElevenLabs voices: ' + err.message, 'error');
+      } finally {
+        this.elevenVoicesLoading = false;
+      }
+    },
+
+    switchTtsProvider(provider) {
+      this.ttsProvider = provider;
+      if (provider === 'elevenlabs') {
+        this.loadElevenVoices();
+        if (!this.ttsModel || this.ttsModel.startsWith('aura-')) {
+          this.ttsModel = '';
+        }
+      } else {
+        if (!this.ttsModel || !this.ttsModel.startsWith('aura-')) {
+          this.ttsModel = 'aura-2-asteria-en';
+        }
+      }
+    },
+
     async runTts() {
       if (!this.ttsText.trim()) return;
       this.ttsLoading = true;
@@ -445,6 +605,7 @@ function appData() {
           body: JSON.stringify({
             text: this.ttsText,
             tts_model: this.ttsModel,
+            tts_provider: this.ttsProvider,
             mode: this.ttsMode,
             stt_params: this.getCleanParams('batch'),
           }),
@@ -552,6 +713,11 @@ function appData() {
       const base = this.params.base_url || 'api.deepgram.com';
 
       if (this.mode === 'tts') {
+        if (this.ttsProvider === 'elevenlabs') {
+          const voiceId = this.ttsModel || '(select voice)';
+          this.urlDisplay = `api.elevenlabs.io/v1/text-to-speech/${voiceId}`;
+          return `https://${this.urlDisplay}`;
+        }
         const ttsModel = this.ttsModel || 'aura-2-asteria-en';
         this.urlDisplay = `${base}/v1/speak?model=${ttsModel}&encoding=mp3`;
         return `https://${this.urlDisplay}`;
