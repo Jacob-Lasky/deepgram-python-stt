@@ -5,6 +5,8 @@ import os
 import re
 import secrets
 import tempfile
+from collections import defaultdict, deque
+from time import monotonic
 import urllib.parse
 from pathlib import Path
 
@@ -21,7 +23,7 @@ from fastapi import Depends, FastAPI, HTTPException, Request, UploadFile, File
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
-from stt.options import clean_params, Mode
+from stt.options import Mode, query_string, serialize_params
 
 load_dotenv()
 
@@ -49,39 +51,138 @@ ALLOWED_STT_HOSTS = {
 }
 _BARE_HOST_RE = re.compile(r"^[a-z0-9]([a-z0-9.-]*[a-z0-9])?(:\d{1,5})?$")
 
-# Caps so an unauthenticated caller cannot run up an unbounded bill or fill the
-# disk. TTS is billed per character and STT per audio-minute, so the text cap is
-# a spend cap, not just a validation nicety.
+# --- Tiered access ---
+# This app is BOTH a capability demo and a diagnostic tool, so a visitor with
+# no token must get a working app, mic streaming included: a dead UI demos
+# nothing. Access is therefore a budget, not a wall. Anonymous callers get a
+# small allowance; a valid token lifts the limits for the operator and the
+# sweep harnesses in scripts/.
+#
+# Per-IP limiting alone does NOT protect the bill, because IPs are cheap. The
+# GLOBAL anonymous ceiling is the load-bearing control: per-IP stops one person
+# hammering, the global cap is what makes a distributed attempt pointless.
+# DO NOT remove the global ceiling on the grounds that per-IP covers it.
+#
+# In-process counters are correct here rather than Redis: fly.toml pins this app
+# to a single machine with a single worker because python-socketio keeps session
+# state in memory, so there is no second process to share state with. If that
+# ever changes, these counters need an external store and so does the socket map.
+ANON_ACCESS = os.getenv("ANON_ACCESS", "true").strip().lower() not in ("0", "false", "no", "off")
+ANON_RATE_LIMIT = int(os.getenv("ANON_RATE_LIMIT", 15))
+ANON_RATE_WINDOW_S = int(os.getenv("ANON_RATE_WINDOW_S", 300))
+ANON_GLOBAL_LIMIT = int(os.getenv("ANON_GLOBAL_LIMIT", 300))
+ANON_GLOBAL_WINDOW_S = int(os.getenv("ANON_GLOBAL_WINDOW_S", 3600))
+ANON_MAX_CONCURRENT_STREAMS = int(os.getenv("ANON_MAX_CONCURRENT_STREAMS", 3))
+ANON_MAX_STREAM_SECONDS = int(os.getenv("ANON_MAX_STREAM_SECONDS", 120))
+
+# Per-request caps. TTS bills per character and STT per audio-minute, so these
+# are spend caps, not validation niceties. The anonymous tier is tighter.
 MAX_TTS_CHARS = int(os.getenv("MAX_TTS_CHARS", 2000))
 MAX_UPLOAD_BYTES = int(os.getenv("MAX_UPLOAD_BYTES", 100 * 1024 * 1024))
+ANON_MAX_TTS_CHARS = int(os.getenv("ANON_MAX_TTS_CHARS", 400))
+ANON_MAX_UPLOAD_BYTES = int(os.getenv("ANON_MAX_UPLOAD_BYTES", 10 * 1024 * 1024))
+
+# Sliding-window hit logs. Keyed by client IP, plus one global log.
+_anon_hits: dict[str, deque] = defaultdict(deque)
+_anon_global_hits: deque = deque()
 
 
-# --- Security: API access token ---
-# The UI shell (GET / and /static/*) is deliberately OPEN so a shared link is
-# browsable with no wall. Everything that SPENDS THE DEEPGRAM KEY is gated:
-# the HTTP API and the SocketIO stream.
+def _prune(log: deque, cutoff: float) -> None:
+    while log and log[0] < cutoff:
+        log.popleft()
+
+
+def _client_ip(request: Request) -> str:
+    """Best-effort client IP. Behind Fly's proxy the real one is in a header."""
+    forwarded = request.headers.get("fly-client-ip") or request.headers.get("x-forwarded-for", "")
+    if forwarded:
+        return forwarded.split(",")[0].strip()
+    return request.client.host if request.client else "unknown"
+
+
+def _anon_rate_limit(ip: str) -> str | None:
+    """Charge one anonymous request against both windows.
+
+    Returns None when allowed, or a human-readable reason when over a limit.
+    Nothing is charged when the caller is refused, so a blocked client cannot
+    push its own window further out.
+    """
+    now = monotonic()
+    _prune(_anon_global_hits, now - ANON_GLOBAL_WINDOW_S)
+    if len(_anon_global_hits) >= ANON_GLOBAL_LIMIT:
+        return (
+            "this demo's shared hourly limit is used up; add an access token "
+            "for unlimited use"
+        )
+
+    log = _anon_hits[ip]
+    _prune(log, now - ANON_RATE_WINDOW_S)
+    if len(log) >= ANON_RATE_LIMIT:
+        return (
+            f"rate limit: {ANON_RATE_LIMIT} requests per "
+            f"{ANON_RATE_WINDOW_S // 60} minutes without an access token"
+        )
+
+    log.append(now)
+    _anon_global_hits.append(now)
+    _sweep_stale_ip_windows(now)
+    return None
+
+
+# Sweeping every request would be O(number of IPs) per request. Amortize it.
+_SWEEP_EVERY = 500
+_sweep_countdown = _SWEEP_EVERY
+
+
+def _sweep_stale_ip_windows(now: float) -> None:
+    """Drop per-IP windows whose hits have all expired.
+
+    Pruning is lazy and per-IP, so an IP that never returns keeps a deque
+    holding expired timestamps forever: one entry per IP that ever visited,
+    which is an unbounded leak in a long-lived process. Deleting only ALREADY
+    empty deques does not fix it, because nothing empties them. Prune first,
+    then delete.
+    """
+    global _sweep_countdown
+    _sweep_countdown -= 1
+    if _sweep_countdown > 0:
+        return
+    _sweep_countdown = _SWEEP_EVERY
+    cutoff = now - ANON_RATE_WINDOW_S
+    for key in list(_anon_hits):
+        _prune(_anon_hits[key], cutoff)
+        if not _anon_hits[key]:
+            del _anon_hits[key]
+
+
+# --- Security: the access token that lifts the anonymous limits ---
+# The token is a BUDGET LIFT, not a wall. The UI shell (GET / and /static/*) is
+# always open, and an anonymous visitor gets a working app under the limits
+# above, because this is a capability demo and a dead UI demos nothing.
 #
-# DO NOT "exempt the UI" by leaving the SocketIO connect handler ungated. The
-# browser is attacker-controlled, so there is no way to authenticate "our own
-# page" as distinct from a user: anyone who loads it can read its network calls
-# and replay them. Mic streaming runs over SocketIO, so an ungated socket is a
-# free key-spend path straight through the open UI.
+# The SocketIO stream is metered exactly like the HTTP API, and DO NOT exempt it
+# on the grounds that "only our own page opens it." The browser is
+# attacker-controlled, so there is no way to authenticate the page as distinct
+# from a user: anyone who loads it can read its network calls and replay them.
+# Mic streaming spends the key over that socket, so an unmetered socket is an
+# unbounded key-spend path straight through the open UI.
 #
-# APP_ACCESS_TOKEN unset means no gate, which is what local dev and the test
-# suite want. REQUIRE_AUTH=true asserts the gate is on, so a deployment cannot
-# silently come up open because a secret was forgotten.
+# APP_ACCESS_TOKEN unset means everyone is privileged, which is what local dev
+# and the test suite want. REQUIRE_AUTH=true asserts a token IS configured, so a
+# deployment cannot silently come up with its limits disabled.
 APP_ACCESS_TOKEN = os.getenv("APP_ACCESS_TOKEN", "").strip()
 REQUIRE_AUTH = os.getenv("REQUIRE_AUTH", "").strip().lower() in ("1", "true", "yes", "on")
 
 if REQUIRE_AUTH and not APP_ACCESS_TOKEN:
     raise RuntimeError(
         "REQUIRE_AUTH is set but APP_ACCESS_TOKEN is empty. Set the token "
-        "(fly secrets set APP_ACCESS_TOKEN=...) or unset REQUIRE_AUTH for open access."
+        "(fly secrets set APP_ACCESS_TOKEN=...) or unset REQUIRE_AUTH to run "
+        "with no privileged tier."
     )
 if not APP_ACCESS_TOKEN:
     logger.warning(
-        "APP_ACCESS_TOKEN is not set: the API is OPEN and anyone who can reach "
-        "this app can spend the Deepgram key."
+        "APP_ACCESS_TOKEN is not set: every caller is privileged and the "
+        "anonymous rate limits do not apply."
     )
 
 
@@ -100,16 +201,75 @@ def _extract_token(request: Request) -> str:
     return (request.query_params.get("token") or "").strip()
 
 
-def _require_api_token(request: Request) -> None:
-    """FastAPI dependency gating every endpoint that spends the Deepgram key."""
+def _is_privileged(token: str) -> bool:
+    """Does this token lift the anonymous limits?
+
+    With no APP_ACCESS_TOKEN configured everyone is privileged, which is what
+    local dev and the test suite want. compare_digest, not ==, so a wrong token
+    cannot be recovered by timing.
+    """
     if not APP_ACCESS_TOKEN:
+        return True
+    return secrets.compare_digest(token, APP_ACCESS_TOKEN)
+
+
+def _enforce_access(request: Request) -> None:
+    """Dependency on every endpoint that spends the Deepgram key.
+
+    Privileged callers pass through untouched. Anonymous callers are allowed but
+    metered, so the demo keeps working for a visitor with no token. Sets
+    request.state.privileged so handlers can pick the right per-request caps.
+    """
+    privileged = _is_privileged(_extract_token(request))
+    request.state.privileged = privileged
+    if privileged:
         return
-    # compare_digest, not ==, so a wrong token cannot be recovered by timing.
-    if not secrets.compare_digest(_extract_token(request), APP_ACCESS_TOKEN):
+    if not ANON_ACCESS:
         raise HTTPException(
             status_code=401,
-            detail="missing or invalid access token (send X-App-Token or ?token=)",
+            detail="this instance requires an access token (send X-App-Token or ?token=)",
         )
+    reason = _anon_rate_limit(_client_ip(request))
+    if reason:
+        raise HTTPException(status_code=429, detail=reason)
+
+
+def _tts_char_cap(request: Request) -> int:
+    return MAX_TTS_CHARS if getattr(request.state, "privileged", False) else ANON_MAX_TTS_CHARS
+
+
+def _upload_byte_cap(request: Request) -> int:
+    return MAX_UPLOAD_BYTES if getattr(request.state, "privileged", False) else ANON_MAX_UPLOAD_BYTES
+
+
+async def _check_remote_audio_size(url: str, limit: int) -> str | None:
+    """Bound the size of a caller-supplied audio URL before Deepgram fetches it.
+
+    Uploads are capped as they stream, but a URL hands Deepgram an object of
+    unknown length: the per-request rate limit cannot bound it, because one
+    allowed request can point at a ten-hour recording. HEAD it first and require
+    a Content-Length that fits. Returns None when acceptable, else a reason.
+
+    An unknown length is refused rather than allowed: failing open here would
+    make the whole cap decorative, since omitting Content-Length is trivial.
+    """
+    try:
+        async with httpx.AsyncClient(timeout=15.0, follow_redirects=True) as client:
+            resp = await client.head(url)
+    except httpx.HTTPError as e:
+        return f"could not check the audio URL: {e}"
+
+    if resp.status_code >= 400:
+        return f"the audio URL returned HTTP {resp.status_code}"
+    length = resp.headers.get("content-length")
+    if not length or not length.isdigit():
+        return (
+            "the audio URL did not report a size; upload the file instead, "
+            "or add an access token"
+        )
+    if int(length) > limit:
+        return f"the audio URL is larger than {limit} bytes"
+    return None
 
 
 class HostNotAllowed(ValueError):
@@ -177,6 +337,11 @@ def _clean_error(e: Exception) -> str:
 #        ws (AsyncV1SocketClient | None), request_id (str | None)
 _sessions: dict[str, dict] = {}
 
+# Access tier per CONNECTED socket, which outlives any single stream on it.
+# Kept separate from _sessions because _sessions only exists while a stream runs,
+# and the tier has to be known at stream-start time to pick the limits.
+_socket_tiers: dict[str, bool] = {}
+
 
 # --- HTTP Routes ---
 
@@ -185,23 +350,38 @@ async def index():
     return FileResponse("templates/index.html")
 
 
-@fastapi_app.post("/upload", dependencies=[Depends(_require_api_token)])
-async def upload(file: UploadFile = File(...)):
+@fastapi_app.post("/upload", dependencies=[Depends(_enforce_access)])
+async def upload(request: Request, file: UploadFile = File(...)):
     try:
         path = _safe_temp_path(file.filename)
     except ValueError as e:
         return JSONResponse({"error": str(e)}, status_code=400)
-    content = await file.read()
-    if len(content) > MAX_UPLOAD_BYTES:
-        return JSONResponse(
-            {"error": f"file exceeds {MAX_UPLOAD_BYTES} bytes"}, status_code=413
-        )
-    path.write_bytes(content)
+
+    limit = _upload_byte_cap(request)
+    # Stream to disk with a running total. DO NOT go back to `await file.read()`
+    # then checking len(): that buffers the WHOLE upload in RAM before the check,
+    # so an oversized body OOMs a 512mb machine before the cap can reject it.
+    written = 0
+    try:
+        with path.open("wb") as out:
+            while chunk := await file.read(1024 * 1024):
+                written += len(chunk)
+                if written > limit:
+                    out.close()
+                    path.unlink(missing_ok=True)
+                    return JSONResponse(
+                        {"error": f"file exceeds {limit} bytes"}, status_code=413
+                    )
+                out.write(chunk)
+    except OSError as e:
+        path.unlink(missing_ok=True)
+        return JSONResponse({"error": f"could not store upload: {e}"}, status_code=500)
+
     # Report the sanitized name; the caller must use it for follow-up calls.
-    return JSONResponse({"filename": path.name, "size": path.stat().st_size})
+    return JSONResponse({"filename": path.name, "size": written})
 
 
-@fastapi_app.get("/files/{filename}", dependencies=[Depends(_require_api_token)])
+@fastapi_app.get("/files/{filename}", dependencies=[Depends(_enforce_access)])
 async def serve_file(filename: str):
     try:
         path = _safe_temp_path(filename)
@@ -249,15 +429,7 @@ async def _stt_batch(audio_bytes: bytes, stt_params: dict, api_key: str) -> dict
     """Transcribe audio bytes via Deepgram pre-recorded (batch) API."""
     headers = {"Authorization": f"Token {api_key}"}
     base_url = _resolve_stt_host(stt_params)
-    clean = clean_params(stt_params, Mode.BATCH)
-    query_params = {}
-    for k, v in clean.items():
-        if isinstance(v, bool):
-            query_params[k] = "true" if v else "false"
-        elif isinstance(v, (list, str)):
-            query_params[k] = v
-        else:
-            query_params[k] = str(v)
+    query_params = serialize_params(stt_params, Mode.BATCH)
     query_params.setdefault("model", "nova-2")
 
     async with httpx.AsyncClient(timeout=60.0) as client:
@@ -327,17 +499,7 @@ async def _stt_streaming_raw(text: str, tts_model: str, stt_params: dict, api_ke
     Returns full raw responses so callers can inspect the response schema.
     """
     base_url = _resolve_stt_host(stt_params)
-    clean = clean_params(stt_params, Mode.STREAMING)
-    query_parts = []
-    for k, v in clean.items():
-        if isinstance(v, bool):
-            query_parts.append(f"{k}={'true' if v else 'false'}")
-        elif isinstance(v, list):
-            for item in v:
-                query_parts.append(f"{k}={urllib.parse.quote(str(item))}")
-        else:
-            query_parts.append(f"{k}={urllib.parse.quote(str(v))}")
-    qs = "&".join(query_parts)
+    qs = query_string(stt_params, Mode.STREAMING)
     ws_url = f"wss://{base_url}/v1/listen?{qs}" if qs else f"wss://{base_url}/v1/listen"
     headers = {"Authorization": f"Token {api_key}"}
 
@@ -403,7 +565,7 @@ async def _stt_streaming_raw(text: str, tts_model: str, stt_params: dict, api_ke
     }
 
 
-@fastapi_app.get("/api/tts-voices", dependencies=[Depends(_require_api_token)])
+@fastapi_app.get("/api/tts-voices", dependencies=[Depends(_enforce_access)])
 async def tts_voices(provider: str = "elevenlabs", language: str = ""):
     """Return available voices for a TTS provider, optionally filtered by language.
 
@@ -474,7 +636,7 @@ async def _generate_tts_audio(text: str, tts_model: str, provider: str) -> bytes
         return await _tts_generate(text, tts_model, api_key)
 
 
-@fastapi_app.post("/api/tts-transcribe", dependencies=[Depends(_require_api_token)])
+@fastapi_app.post("/api/tts-transcribe", dependencies=[Depends(_enforce_access)])
 async def tts_transcribe(request: Request):
     body = await request.json()
     text = body.get("text", "").strip()
@@ -485,9 +647,10 @@ async def tts_transcribe(request: Request):
 
     if not text:
         return JSONResponse({"error": "text is required"}, status_code=400)
-    if len(text) > MAX_TTS_CHARS:
+    tts_cap = _tts_char_cap(request)
+    if len(text) > tts_cap:
         return JSONResponse(
-            {"error": f"text exceeds {MAX_TTS_CHARS} characters"}, status_code=413
+            {"error": f"text exceeds {tts_cap} characters"}, status_code=413
         )
     if mode not in ("batch", "streaming", "both"):
         return JSONResponse({"error": "mode must be batch, streaming, or both"}, status_code=400)
@@ -537,7 +700,7 @@ async def tts_transcribe(request: Request):
         return JSONResponse({"error": _clean_error(e)}, status_code=500)
 
 
-@fastapi_app.post("/transcribe", dependencies=[Depends(_require_api_token)])
+@fastapi_app.post("/transcribe", dependencies=[Depends(_enforce_access)])
 async def transcribe(request: Request):
     body = await request.json()
     params = body.get("params", {})
@@ -553,16 +716,14 @@ async def transcribe(request: Request):
     except HostNotAllowed as e:
         return JSONResponse({"error": str(e)}, status_code=400)
 
+    # An anonymous caller may not hand Deepgram an object of unknown length.
+    if url and not getattr(request.state, "privileged", False):
+        reason = await _check_remote_audio_size(url, _upload_byte_cap(request))
+        if reason:
+            return JSONResponse({"error": reason}, status_code=413)
+
     # Build clean query params for batch mode, convert bools to lowercase strings
-    clean = clean_params(params, Mode.BATCH)
-    query_params = {}
-    for k, v in clean.items():
-        if isinstance(v, bool):
-            query_params[k] = "true" if v else "false"
-        elif isinstance(v, (list, str)):
-            query_params[k] = v
-        else:
-            query_params[k] = str(v)
+    query_params = serialize_params(params, Mode.BATCH)
     query_params.setdefault("model", "nova-2")
 
     headers = {"Authorization": f"Token {api_key}"}
@@ -602,15 +763,7 @@ def _params_to_sdk_kwargs(raw_params: dict) -> dict:
     """Convert frontend params dict to deepgram-sdk 6.x keyword args.
     model is required by connect() — default to nova-2 if not provided.
     """
-    clean = clean_params(raw_params, Mode.STREAMING)
-    kwargs = {}
-    for k, v in clean.items():
-        if isinstance(v, bool):
-            kwargs[k] = "true" if v else "false"
-        elif isinstance(v, (list, str)):
-            kwargs[k] = v
-        else:
-            kwargs[k] = str(v)
+    kwargs = serialize_params(raw_params, Mode.STREAMING)
     kwargs.setdefault("model", "nova-2")
     return kwargs
 
@@ -663,8 +816,25 @@ async def streaming_task(sid: str, params: dict, stop_event: asyncio.Event) -> N
 
             ka_task = asyncio.create_task(keep_alive_loop())
 
-            # Wait for stop signal from on_toggle_transcription(stop) or disconnect()
-            await stop_event.wait()
+            # Wait for stop signal from on_toggle_transcription(stop) or
+            # disconnect(). Anonymous streams also stop on a wall-clock cap:
+            # an untokened mic stream left open is the largest unbounded spend
+            # path in the app, and the per-request rate limit cannot bound it
+            # because one connect can stream for hours.
+            privileged = _sessions.get(sid, {}).get("privileged", False)
+            if privileged:
+                await stop_event.wait()
+            else:
+                try:
+                    await asyncio.wait_for(
+                        stop_event.wait(), timeout=ANON_MAX_STREAM_SECONDS
+                    )
+                except asyncio.TimeoutError:
+                    logger.info("[%s] anon stream hit the %ss cap", sid, ANON_MAX_STREAM_SECONDS)
+                    await sio.emit("stream_limit_reached", {
+                        "reason": f"Demo streams stop after {ANON_MAX_STREAM_SECONDS} seconds. "
+                                  f"Add an access token for unlimited streaming.",
+                    }, to=sid)
 
             # Graceful shutdown: cancel keep-alive, send CloseStream, await final results
             ka_task.cancel()
@@ -792,23 +962,40 @@ async def connect(sid, environ, auth=None):
     is part of the API surface even though the page that opens it is public.
     Refusing here is cheaper than checking on every audio frame.
     """
-    if APP_ACCESS_TOKEN:
-        supplied = ""
-        if isinstance(auth, dict):
-            supplied = str(auth.get("token") or "").strip()
-        if not supplied:
-            # Fall back to the handshake query string for non-browser clients.
-            supplied = urllib.parse.parse_qs(
-                environ.get("QUERY_STRING", "")
-            ).get("token", [""])[0].strip()
-        if not secrets.compare_digest(supplied, APP_ACCESS_TOKEN):
-            logger.warning("Refused SocketIO connect (bad token): %s", sid)
-            raise socketio.exceptions.ConnectionRefusedError("invalid access token")
-    logger.info("Client connected: %s", sid)
+    supplied = ""
+    if isinstance(auth, dict):
+        supplied = str(auth.get("token") or "").strip()
+    if not supplied:
+        # Fall back to the handshake query string for non-browser clients.
+        supplied = urllib.parse.parse_qs(
+            environ.get("QUERY_STRING", "")
+        ).get("token", [""])[0].strip()
+
+    privileged = _is_privileged(supplied)
+    if not privileged:
+        if not ANON_ACCESS:
+            logger.warning("Refused SocketIO connect (token required): %s", sid)
+            raise socketio.exceptions.ConnectionRefusedError("access token required")
+        anon_streams = sum(1 for s in _sessions.values() if not s.get("privileged"))
+        if anon_streams >= ANON_MAX_CONCURRENT_STREAMS:
+            logger.warning("Refused SocketIO connect (anon concurrency): %s", sid)
+            raise socketio.exceptions.ConnectionRefusedError(
+                "too many people are using the demo right now, try again shortly"
+            )
+
+    _socket_tiers[sid] = privileged
+    logger.info("Client connected: %s privileged=%s", sid, privileged)
+    # Tell the client which tier it is in so the UI can show its budget.
+    await sio.emit("access_tier", {
+        "privileged": privileged,
+        "max_stream_seconds": None if privileged else ANON_MAX_STREAM_SECONDS,
+        "max_tts_chars": MAX_TTS_CHARS if privileged else ANON_MAX_TTS_CHARS,
+    }, to=sid)
 
 
 @sio.event
 async def disconnect(sid, reason=None):
+    _socket_tiers.pop(sid, None)
     session = _sessions.pop(sid, None)
     if session:
         session["stop_event"].set()
@@ -829,7 +1016,10 @@ async def on_toggle_transcription(sid, data):
             logger.warning("[%s] toggle_transcription(start) while already streaming — ignoring", sid)
             return
         stop_event = asyncio.Event()
-        _sessions[sid] = {"stop_event": stop_event, "ws": None, "request_id": None}
+        _sessions[sid] = {
+            "stop_event": stop_event, "ws": None, "request_id": None,
+            "privileged": _socket_tiers.get(sid, False),
+        }
         task = asyncio.create_task(streaming_task(sid, params, stop_event))
         _sessions[sid]["task"] = task
 
@@ -883,7 +1073,10 @@ async def on_start_file_streaming(sid, data):
         return
 
     stop_event = asyncio.Event()
-    _sessions[sid] = {"stop_event": stop_event, "ws": None, "request_id": None}
+    _sessions[sid] = {
+        "stop_event": stop_event, "ws": None, "request_id": None,
+        "privileged": _socket_tiers.get(sid, False),
+    }
     task = asyncio.create_task(file_streaming_task(sid, filename, params, stop_event))
     _sessions[sid]["task"] = task
 

@@ -120,29 +120,47 @@ whoever hits it, so these bound what a caller can do:
 
 | Variable | Default | Purpose |
 |----------|---------|---------|
-| `APP_ACCESS_TOKEN` | *(unset)* | Shared secret gating every endpoint that spends the Deepgram key. Unset means the API is open, which is what local dev wants. |
-| `REQUIRE_AUTH` | *(unset)* | When true, the app refuses to boot without `APP_ACCESS_TOKEN`, so a forgotten secret fails the deploy instead of serving an open API. Set to `true` in `fly.toml`. |
-| `ALLOWED_STT_HOSTS` | `api.deepgram.com` | Comma-separated allowlist of hosts the `base_url` override may target. A caller-supplied host outside this list is rejected with a 400. Add an AI Works host here to test a flow's `/v1/listen` compat endpoint. |
-| `MAX_TTS_CHARS` | `2000` | Caps TTS text length. TTS bills per character, so this is a spend cap. |
-| `MAX_UPLOAD_BYTES` | `104857600` | Caps upload size. |
+| `APP_ACCESS_TOKEN` | *(unset)* | Shared secret that LIFTS the anonymous limits. Unset means every caller is privileged, which is what local dev wants. |
+| `REQUIRE_AUTH` | *(unset)* | When true, the app refuses to boot without `APP_ACCESS_TOKEN`, so a deploy cannot silently come up with its limits disabled. Set to `true` in `fly.toml`. |
+| `ANON_ACCESS` | `true` | Set false to require a token outright. Leaving it true is the point: the demo has to work for a visitor. |
+| `ANON_RATE_LIMIT` / `ANON_RATE_WINDOW_S` | `15` / `300` | Per-IP request budget. |
+| `ANON_GLOBAL_LIMIT` / `ANON_GLOBAL_WINDOW_S` | `300` / `3600` | Budget across ALL anonymous traffic. This is the control that actually caps the bill. |
+| `ANON_MAX_CONCURRENT_STREAMS` | `3` | Simultaneous untokened streams. |
+| `ANON_MAX_STREAM_SECONDS` | `120` | Wall-clock cap on an untokened stream. |
+| `ANON_MAX_TTS_CHARS` / `ANON_MAX_UPLOAD_BYTES` | `400` / `10MB` | Tighter per-request caps for the anonymous tier. |
+| `MAX_TTS_CHARS` / `MAX_UPLOAD_BYTES` | `2000` / `100MB` | Per-request caps for the privileged tier. |
+### Access is a budget, not a wall
 
-**`base_url` is operator-gated on purpose.** It used to accept any host and
-forwarded the server's `Authorization: Token <key>` header there, which leaked
-the key to a destination the caller picked. Do not relax the allowlist to
-accept caller-supplied hosts.
+This app is both a capability demo and a diagnostic tool, so an anonymous
+visitor gets a **working** app, mic streaming included. A dead UI demos nothing.
+The token raises the limits rather than unlocking the door.
 
-### The API is gated, the UI is not
+| | Anonymous | With a token |
+|---|---|---|
+| Load the UI | yes | yes |
+| Mic / file / batch / TTS | yes | yes |
+| Requests | 15 per IP per 5 min, and 300/hour across all anonymous traffic | unlimited |
+| Concurrent streams | 3 | unlimited |
+| Stream length | 120s | unlimited |
+| TTS text | 400 chars | 2000 chars |
+| Upload | 10MB | 100MB |
+| Audio by URL | must report a `Content-Length` within the upload cap | any |
 
-**`GET /` and `/static/*` are public on purpose** so a shared link is browsable
-and the params panel is explorable with no wall. Everything that spends the
-Deepgram key requires the token: `/upload`, `/files/*`, `/transcribe`,
-`/api/tts-transcribe`, `/api/tts-voices`, and the **SocketIO stream**.
+**The global hourly ceiling is the load-bearing control, not the per-IP limit.**
+IPs are cheap, so per-IP only stops one person hammering; the global cap is what
+makes a distributed attempt pointless. Do not remove it on the grounds that
+per-IP covers it.
 
-Mic and file streaming run over SocketIO, so that socket is part of the API
-surface even though the page opening it is public. **Do not exempt it.** The
-browser is attacker-controlled, so there is no way to authenticate "our own
-page" as distinct from a user: anyone who loads it can read its network calls
-and replay them. An ungated socket is a free key-spend path through the open UI.
+**The SocketIO stream is metered exactly like the HTTP API.** Mic and file
+streaming spend the Deepgram key over that socket. Do not exempt it because
+"only our own page opens it": the browser is attacker-controlled, so there is no
+way to authenticate the page as distinct from a user, and anyone who loads the
+public page can read its network calls and replay them.
+
+**An anonymous caller may not hand Deepgram a URL of unknown length.** Uploads
+are capped as they stream, but one allowed request pointing at a ten-hour
+recording is unbounded spend the rate limit cannot see, so `/transcribe` HEADs
+the URL first and refuses a missing or oversized `Content-Length`.
 
 Three ways to send the token, in precedence order:
 
@@ -153,21 +171,23 @@ curl "https://…/files/clip.wav?token=$APP_ACCESS_TOKEN"   # for <audio src>, w
 ```
 
 Share the app as `https://your-app.fly.dev/?token=YOUR_TOKEN`. The frontend
-reads the token, stores it in `sessionStorage`, strips it back out of the
-visible URL so it does not leak into a screenshot, and attaches it to every
-call including the socket handshake. Scripts in `scripts/` read
-`APP_ACCESS_TOKEN` from the environment.
+reads the token, stores it in `sessionStorage`, strips it back out of the visible
+URL so it does not leak into a screenshot, and attaches it to every call
+including the socket handshake. Anonymous visitors see a banner explaining the
+demo budget, and a hit limit is reported in place rather than looking broken.
+Scripts in `scripts/` read `APP_ACCESS_TOKEN` from the environment.
 
 ```bash
 fly secrets set APP_ACCESS_TOKEN="$(openssl rand -hex 24)"
 ```
 
-**Still open:** `cors_allowed_origins` is `"*"`, and there is no rate limit, so
-a holder of the token can still spend without bound. Use a scoped `usage:write`
-Deepgram key here rather than an org-wide one, and set a spend ceiling with
-alerting.
+**Rate-limit state is in-process, which is correct here:** `fly.toml` pins the
+app to a single machine with a single worker because python-socketio keeps
+session state in memory. Scaling past one machine needs an external store for
+these counters as well as for the socket sessions.
 
----
+**Still open:** `cors_allowed_origins` is `"*"`. Use a scoped `usage:write`
+Deepgram key rather than an org-wide one, and set a spend ceiling with alerting.
 
 ## Supported Redact Values
 
@@ -198,7 +218,7 @@ All values below are verified to work with the Deepgram streaming API:
 uv run pytest tests/ -v
 ```
 
-73 tests, 1 skipped. Tests use a real `UvicornTestServer` + `socketio.AsyncClient` — no mocking of the SocketIO layer.
+86 tests, 1 skipped. Tests use a real `UvicornTestServer` + `socketio.AsyncClient` — no mocking of the SocketIO layer.
 
 <!-- TODO: add screenshot of batch mode -->
 <!-- ![Deepgram STT Explorer — Batch Mode](docs/images/stt-batch.png) -->

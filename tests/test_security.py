@@ -8,6 +8,7 @@ import os
 from pathlib import Path
 
 import pytest
+from fastapi import HTTPException
 
 os.environ.setdefault("DEEPGRAM_API_KEY", "test-key")
 
@@ -182,33 +183,36 @@ def test_require_auth_with_a_token_starts_cleanly():
     assert proc.returncode == 0, proc.stderr
 
 
-def test_token_gate_is_off_when_no_token_is_configured():
-    """Local dev and this suite run open; the gate is opt-in via the env var."""
-    assert app.APP_ACCESS_TOKEN == ""
-    assert app._require_api_token(_FakeRequest()) is None
-
-
 class _FakeRequest:
-    """Minimal stand-in for starlette Request: headers + query_params only."""
+    """Minimal stand-in for starlette Request: headers, query_params, state."""
 
-    def __init__(self, headers=None, query=None):
+    class _State:
+        pass
+
+    def __init__(self, headers=None, query=None, client_ip="203.0.113.9"):
         self.headers = headers or {}
         self.query_params = query or {}
+        self.state = self._State()
+        self.client = type("C", (), {"host": client_ip})()
 
 
-@pytest.mark.parametrize("headers,query", [
-    ({}, {}),                                        # nothing supplied
-    ({"x-app-token": "wrong"}, {}),                  # wrong header
-    ({"authorization": "Bearer wrong"}, {}),         # wrong bearer
-    ({}, {"token": "wrong"}),                        # wrong query param
-    ({"x-app-token": ""}, {"token": "wrong"}),       # empty header, wrong query
-])
-def test_token_gate_rejects_bad_credentials(monkeypatch, headers, query):
-    from fastapi import HTTPException
-    monkeypatch.setattr(app, "APP_ACCESS_TOKEN", "right-token")
-    with pytest.raises(HTTPException) as exc:
-        app._require_api_token(_FakeRequest(headers, query))
-    assert exc.value.status_code == 401
+@pytest.fixture(autouse=True)
+def _reset_rate_limits():
+    """Rate-limit state is module-global; a leaked window breaks later tests."""
+    app._anon_hits.clear()
+    app._anon_global_hits.clear()
+    yield
+    app._anon_hits.clear()
+    app._anon_global_hits.clear()
+
+
+def test_everyone_is_privileged_when_no_token_is_configured():
+    """Local dev and this suite run with the limits off."""
+    assert app.APP_ACCESS_TOKEN == ""
+    assert app._is_privileged("") is True
+    req = _FakeRequest()
+    assert app._enforce_access(req) is None
+    assert req.state.privileged is True
 
 
 @pytest.mark.parametrize("headers,query", [
@@ -217,37 +221,225 @@ def test_token_gate_rejects_bad_credentials(monkeypatch, headers, query):
     ({"authorization": "bearer right-token"}, {}),   # scheme is case-insensitive
     ({}, {"token": "right-token"}),                  # <audio src> has no headers
 ])
-def test_token_gate_accepts_good_credentials(monkeypatch, headers, query):
+def test_a_valid_token_is_privileged(monkeypatch, headers, query):
     monkeypatch.setattr(app, "APP_ACCESS_TOKEN", "right-token")
-    assert app._require_api_token(_FakeRequest(headers, query)) is None
+    req = _FakeRequest(headers, query)
+    assert app._enforce_access(req) is None
+    assert req.state.privileged is True
 
 
-def test_ui_shell_is_public_but_key_spending_routes_are_gated():
-    """The whole point of the design: browsable page, gated capability."""
-    gated, open_routes = set(), set()
+@pytest.mark.parametrize("headers,query", [
+    ({}, {}),
+    ({"x-app-token": "wrong"}, {}),
+    ({"authorization": "Bearer wrong"}, {}),
+    ({}, {"token": "wrong"}),
+])
+def test_no_token_still_works_but_unprivileged(monkeypatch, headers, query):
+    """The demo must keep working for a visitor with no token."""
+    monkeypatch.setattr(app, "APP_ACCESS_TOKEN", "right-token")
+    req = _FakeRequest(headers, query)
+    assert app._enforce_access(req) is None, "anonymous access must be allowed"
+    assert req.state.privileged is False
+
+
+def test_anon_access_can_be_switched_off_entirely(monkeypatch):
+    monkeypatch.setattr(app, "APP_ACCESS_TOKEN", "right-token")
+    monkeypatch.setattr(app, "ANON_ACCESS", False)
+    with pytest.raises(HTTPException) as exc:
+        app._enforce_access(_FakeRequest())
+    assert exc.value.status_code == 401
+
+
+def test_anon_per_ip_rate_limit_returns_429(monkeypatch):
+    monkeypatch.setattr(app, "APP_ACCESS_TOKEN", "right-token")
+    monkeypatch.setattr(app, "ANON_RATE_LIMIT", 3)
+    for _ in range(3):
+        assert app._enforce_access(_FakeRequest(client_ip="198.51.100.7")) is None
+    with pytest.raises(HTTPException) as exc:
+        app._enforce_access(_FakeRequest(client_ip="198.51.100.7"))
+    assert exc.value.status_code == 429
+    assert "rate limit" in exc.value.detail
+
+
+def test_a_second_ip_has_its_own_per_ip_budget(monkeypatch):
+    monkeypatch.setattr(app, "APP_ACCESS_TOKEN", "right-token")
+    monkeypatch.setattr(app, "ANON_RATE_LIMIT", 2)
+    for _ in range(2):
+        app._enforce_access(_FakeRequest(client_ip="198.51.100.1"))
+    assert app._enforce_access(_FakeRequest(client_ip="198.51.100.2")) is None
+
+
+def test_global_ceiling_stops_a_distributed_attempt(monkeypatch):
+    """The load-bearing control: per-IP is bypassable, the global cap is not."""
+    monkeypatch.setattr(app, "APP_ACCESS_TOKEN", "right-token")
+    monkeypatch.setattr(app, "ANON_RATE_LIMIT", 1000)   # per-IP out of the way
+    monkeypatch.setattr(app, "ANON_GLOBAL_LIMIT", 5)
+    for i in range(5):
+        assert app._enforce_access(_FakeRequest(client_ip=f"198.51.100.{i}")) is None
+    with pytest.raises(HTTPException) as exc:
+        app._enforce_access(_FakeRequest(client_ip="198.51.100.200"))
+    assert exc.value.status_code == 429
+    assert "shared hourly limit" in exc.value.detail
+
+
+def test_a_privileged_caller_is_never_rate_limited(monkeypatch):
+    monkeypatch.setattr(app, "APP_ACCESS_TOKEN", "right-token")
+    monkeypatch.setattr(app, "ANON_RATE_LIMIT", 1)
+    monkeypatch.setattr(app, "ANON_GLOBAL_LIMIT", 1)
+    for _ in range(20):
+        req = _FakeRequest({"x-app-token": "right-token"})
+        assert app._enforce_access(req) is None
+        assert req.state.privileged is True
+    # A privileged caller must not consume the anonymous budget either.
+    assert len(app._anon_global_hits) == 0
+
+
+def test_a_refused_request_is_not_charged(monkeypatch):
+    """Otherwise a blocked client pushes its own window out forever."""
+    monkeypatch.setattr(app, "APP_ACCESS_TOKEN", "right-token")
+    monkeypatch.setattr(app, "ANON_RATE_LIMIT", 2)
+    for _ in range(2):
+        app._enforce_access(_FakeRequest(client_ip="198.51.100.5"))
+    before = len(app._anon_global_hits)
+    for _ in range(5):
+        with pytest.raises(HTTPException):
+            app._enforce_access(_FakeRequest(client_ip="198.51.100.5"))
+    assert len(app._anon_global_hits) == before
+
+
+def test_stale_per_ip_windows_are_swept(monkeypatch):
+    """A deque per IP that ever visited would be an unbounded memory leak.
+
+    Pruning is lazy and per-IP, so an IP that never returns keeps a deque of
+    expired timestamps. Deleting only already-empty deques does not help,
+    because nothing ever empties them.
+    """
+    monkeypatch.setattr(app, "APP_ACCESS_TOKEN", "right-token")
+    monkeypatch.setattr(app, "ANON_RATE_WINDOW_S", 0)  # every hit expires at once
+    monkeypatch.setattr(app, "_SWEEP_EVERY", 10)
+    monkeypatch.setattr(app, "_sweep_countdown", 10)
+    for i in range(200):
+        app._enforce_access(_FakeRequest(client_ip=f"198.51.100.{i % 250}"))
+    assert len(app._anon_hits) <= 10, f"leaked {len(app._anon_hits)} per-IP windows"
+
+
+def test_anon_gets_tighter_per_request_caps(monkeypatch):
+    monkeypatch.setattr(app, "MAX_TTS_CHARS", 2000)
+    monkeypatch.setattr(app, "ANON_MAX_TTS_CHARS", 400)
+    monkeypatch.setattr(app, "MAX_UPLOAD_BYTES", 100)
+    monkeypatch.setattr(app, "ANON_MAX_UPLOAD_BYTES", 10)
+
+    priv, anon = _FakeRequest(), _FakeRequest()
+    priv.state.privileged = True
+    anon.state.privileged = False
+    assert app._tts_char_cap(priv) == 2000
+    assert app._tts_char_cap(anon) == 400
+    assert app._upload_byte_cap(priv) == 100
+    assert app._upload_byte_cap(anon) == 10
+    # An unset state must fail CLOSED to the tighter cap, not the looser one.
+    assert app._tts_char_cap(_FakeRequest()) == 400
+    assert app._upload_byte_cap(_FakeRequest()) == 10
+
+
+def test_ui_shell_is_public_but_key_spending_routes_are_metered():
+    """The whole point of the design: browsable page, metered capability."""
+    metered, open_routes = set(), set()
     for route in app.fastapi_app.routes:
         path = getattr(route, "path", None)
         if path is None:
             continue
         names = [d.dependency.__name__ for d in getattr(route, "dependencies", [])]
-        (gated if "_require_api_token" in names else open_routes).add(path)
+        (metered if "_enforce_access" in names else open_routes).add(path)
 
     assert "/" in open_routes, "the UI shell must stay public"
     for path in ("/upload", "/files/{filename}", "/transcribe",
                  "/api/tts-transcribe", "/api/tts-voices"):
-        assert path in gated, f"{path} spends the Deepgram key and must be gated"
+        assert path in metered, f"{path} spends the Deepgram key and must be metered"
 
 
-def test_socketio_connect_is_gated_too():
-    """Mic streaming spends the key over the socket, so an open socket is a hole."""
+def test_socketio_connect_is_metered_too():
+    """Mic streaming spends the key over the socket, so it is API surface."""
     src = (Path(__file__).resolve().parents[1] / "app.py").read_text()
     connect = src.split("async def connect(")[1].split("async def disconnect")[0]
-    assert "APP_ACCESS_TOKEN" in connect, "connect handler does not check the token"
-    assert "ConnectionRefusedError" in connect, "connect handler does not refuse"
-    assert "compare_digest" in connect, "connect handler must not use == on a secret"
+    assert "_is_privileged" in connect, "connect does not resolve a tier"
+    assert "ANON_MAX_CONCURRENT_STREAMS" in connect, "connect does not cap anon concurrency"
+    assert "ConnectionRefusedError" in connect, "connect cannot refuse"
+
+
+def test_anon_streams_have_a_wall_clock_cap():
+    """A per-request rate limit cannot bound one socket streaming for hours."""
+    src = (Path(__file__).resolve().parents[1] / "app.py").read_text()
+    task = src.split("async def streaming_task(")[1].split("async def file_streaming_task")[0]
+    assert "ANON_MAX_STREAM_SECONDS" in task, "no wall-clock cap on anonymous streams"
+    assert "asyncio.wait_for" in task, "cap is not enforced with a timeout"
 
 
 def test_token_comparison_is_constant_time():
     src = (Path(__file__).resolve().parents[1] / "app.py").read_text()
-    body = src.split("def _require_api_token(")[1].split("\nclass ")[0]
+    body = src.split("def _is_privileged(")[1].split("\ndef ")[0]
     assert "compare_digest" in body, "use secrets.compare_digest, not =="
+
+
+def test_socket_tier_map_is_cleaned_up_on_disconnect():
+    """Otherwise the map leaks one entry per socket ever connected."""
+    src = (Path(__file__).resolve().parents[1] / "app.py").read_text()
+    disc = src.split("async def disconnect(")[1].split("@sio.on(")[0]
+    assert "_socket_tiers.pop" in disc, "disconnect does not drop the tier entry"
+
+
+def test_anon_cannot_hand_deepgram_an_unbounded_url():
+    """Uploads are capped as they stream; a URL is an object of unknown length.
+
+    The per-request rate limit cannot bound it, because one allowed request can
+    point at a ten-hour recording, so /transcribe HEADs the URL for anonymous
+    callers and refuses an unknown or oversized length.
+    """
+    src = (Path(__file__).resolve().parents[1] / "app.py").read_text()
+    handler = src.split('@fastapi_app.post("/transcribe"')[1]
+    assert "_check_remote_audio_size" in handler, "anon URL size is unchecked"
+    assert "privileged" in handler, "the check is not tier-aware"
+
+
+async def test_remote_audio_size_refuses_an_unknown_length(monkeypatch):
+    """Failing open on a missing Content-Length would make the cap decorative."""
+    class _Resp:
+        status_code = 200
+        headers: dict = {}
+
+    class _Client:
+        async def __aenter__(self): return self
+        async def __aexit__(self, *a): return False
+        async def head(self, url): return _Resp()
+
+    monkeypatch.setattr(app.httpx, "AsyncClient", lambda **kw: _Client())
+    reason = await app._check_remote_audio_size("https://x.test/a.wav", 1000)
+    assert reason is not None and "did not report a size" in reason
+
+
+async def test_remote_audio_size_refuses_an_oversized_file(monkeypatch):
+    class _Resp:
+        status_code = 200
+        headers = {"content-length": "5000"}
+
+    class _Client:
+        async def __aenter__(self): return self
+        async def __aexit__(self, *a): return False
+        async def head(self, url): return _Resp()
+
+    monkeypatch.setattr(app.httpx, "AsyncClient", lambda **kw: _Client())
+    reason = await app._check_remote_audio_size("https://x.test/a.wav", 1000)
+    assert reason is not None and "larger than" in reason
+
+
+async def test_remote_audio_size_allows_a_small_file(monkeypatch):
+    class _Resp:
+        status_code = 200
+        headers = {"content-length": "500"}
+
+    class _Client:
+        async def __aenter__(self): return self
+        async def __aexit__(self, *a): return False
+        async def head(self, url): return _Resp()
+
+    monkeypatch.setattr(app.httpx, "AsyncClient", lambda **kw: _Client())
+    assert await app._check_remote_audio_size("https://x.test/a.wav", 1000) is None

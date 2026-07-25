@@ -1,3 +1,4 @@
+import urllib.parse
 from enum import Enum
 
 
@@ -61,3 +62,35 @@ def clean_params(params: dict, mode: Mode) -> dict:
         })
 
     return result
+
+
+def serialize_params(params: dict, mode: Mode) -> dict:
+    """clean_params() plus Deepgram's wire encoding for each value.
+
+    THE single place parameter values get encoded for Deepgram. There used to be
+    five near-identical copies of this loop (three in app.py, one in
+    _stt_streaming_raw, one in STTClient.build_url), so a change to how one
+    value type is encoded had to be made in five places or silently diverge.
+
+    Deepgram REJECTS Python bools, so they go as the lowercase strings
+    "true"/"false". Lists stay lists: the HTTP layer repeats the key per item,
+    which is how keyterm/redact take multiple values.
+    """
+    out: dict = {}
+    for key, value in clean_params(params, mode).items():
+        if isinstance(value, bool):
+            out[key] = "true" if value else "false"
+        elif isinstance(value, (list, str)):
+            out[key] = value
+        else:
+            out[key] = str(value)
+    return out
+
+
+def query_string(params: dict, mode: Mode) -> str:
+    """URL-encoded query string, repeating a key once per list item."""
+    parts = []
+    for key, value in serialize_params(params, mode).items():
+        for item in (value if isinstance(value, list) else [value]):
+            parts.append(f"{key}={urllib.parse.quote(str(item))}")
+    return "&".join(parts)

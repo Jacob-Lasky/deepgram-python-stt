@@ -9,7 +9,11 @@ function appData() {
     // one click, then kept in sessionStorage so it survives navigation without
     // persisting to disk.
     apiToken: '',
-    authRequired: false,   // set when any call comes back 401
+    // Access tier, reported by the server on connect. Anonymous visitors get a
+    // working app under limits; a token lifts them. Rendered as a banner so a
+    // visitor who hits a limit sees why instead of a silently broken page.
+    tier: { known: false, privileged: false, maxStreamSeconds: null, maxTtsChars: null },
+    limitNotice: '',       // set when a limit is actually hit
 
     mode: 'mic',         // 'mic' | 'file' | 'batch' | 'tts'
     rightTab: 'transcript',
@@ -415,9 +419,11 @@ function appData() {
       const opts = Object.assign({}, options || {});
       opts.headers = this._authHeaders(opts.headers);
       const res = await fetch(path, opts);
-      if (res.status === 401) {
-        this.authRequired = true;
-        this.showToast('This instance requires an access token. Open the link with ?token=YOUR_TOKEN', 'error');
+      if (res.status === 401 || res.status === 429) {
+        let detail = '';
+        try { detail = (await res.clone().json()).detail || ''; } catch (e) { /* non-JSON body */ }
+        this.limitNotice = detail || 'This instance requires an access token.';
+        this.showToast(this.limitNotice, 'error');
       }
       return res;
     },
@@ -430,10 +436,28 @@ function appData() {
 
       this.socket.on('connect_error', (err) => {
         this.connected = false;
-        if (String(err && err.message).includes('invalid access token')) {
-          this.authRequired = true;
-          this.showToast('Streaming requires an access token. Open the link with ?token=YOUR_TOKEN', 'error');
+        const msg = String((err && err.message) || '');
+        // The server refuses a connect for a reason worth showing verbatim:
+        // token required, or the demo's concurrent-stream cap.
+        if (msg) {
+          this.limitNotice = msg;
+          this.showToast(msg, 'error');
         }
+      });
+
+      this.socket.on('access_tier', (data) => {
+        this.tier = {
+          known: true,
+          privileged: !!data.privileged,
+          maxStreamSeconds: data.max_stream_seconds,
+          maxTtsChars: data.max_tts_chars,
+        };
+      });
+
+      this.socket.on('stream_limit_reached', (data) => {
+        this.limitNotice = data.reason;
+        this.showToast(data.reason, 'error');
+        this.recording = false;
       });
 
       this.socket.on('connect', () => {
