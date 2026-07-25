@@ -1133,6 +1133,13 @@
                     </template>
                   </div>
                 </div>
+                <!-- Language mismatch warning -->
+                <div x-show="params.language && params.language !== ttsLang && params.language !== 'multi'"
+                  style="background:#78350f;border:1px solid #92400e;border-radius:6px;padding:6px 10px;font-size:12px;color:#fbbf24;">
+                  <i class="fas fa-exclamation-triangle" style="margin-right:4px;"></i>
+                  TTS language (<span x-text="ttsLang"></span>) differs from STT language (<span x-text="params.language"></span>).
+                  Transcription may be inaccurate.
+                </div>
                 <button class="action-btn btn-primary"
                   :disabled="ttsLoading || !ttsText.trim() || !ttsModel"
                   @click="runTts()">
@@ -1356,17 +1363,28 @@
             <i class="fas fa-chevron-down param-section-chevron" :class="sections.redaction && 'open'"></i>
           </div>
           <div x-show="sections.redaction" class="param-section-body">
-            <div class="field-label" style="margin-bottom:8px;">Redact (select all that apply)</div>
-            <div class="checkbox-grid">
-              <template x-for="opt in redactOptions" :key="opt.value">
-                <div class="checkbox-item">
-                  <input type="checkbox" :id="'redact_' + opt.value"
-                    :checked="params.redact.includes(opt.value)"
-                    @change="toggleRedact(opt.value, $event.target.checked)">
-                  <label :for="'redact_' + opt.value" x-text="opt.label"></label>
-                </div>
-              </template>
+            <div class="field-label" style="margin-bottom:4px;">Redact (select all that apply)</div>
+            <div style="display:flex;gap:4px;margin-bottom:8px;flex-wrap:wrap;">
+              <button class="action-btn btn-sm btn-secondary" style="padding:2px 6px;font-size:10px;"
+                @click="redactOptions.forEach(o => { if (!params.redact.includes(o.value)) toggleRedact(o.value, true) })">Select All</button>
+              <button class="action-btn btn-sm btn-secondary" style="padding:2px 6px;font-size:10px;"
+                @click="params.redact = []">Clear All</button>
             </div>
+            <template x-for="grp in ['Groups','PII','PHI','Other']" :key="grp">
+              <div style="margin-bottom:6px;">
+                <div style="font-size:10px;font-weight:700;color:#9ca3af;text-transform:uppercase;letter-spacing:0.5px;margin-bottom:3px;" x-text="grp"></div>
+                <div class="checkbox-grid">
+                  <template x-for="opt in redactOptions.filter(o => o.group === grp)" :key="opt.value">
+                    <div class="checkbox-item">
+                      <input type="checkbox" :id="'redact_' + opt.value"
+                        :checked="params.redact.includes(opt.value)"
+                        @change="toggleRedact(opt.value, $event.target.checked)">
+                      <label :for="'redact_' + opt.value" x-text="opt.label"></label>
+                    </div>
+                  </template>
+                </div>
+              </div>
+            </template>
           </div>
         </div>
 

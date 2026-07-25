@@ -35,9 +35,20 @@ function appData() {
     ttsLastText: '',
     ttsLastTranscript: '',
     ttsLastStreamTranscript: '',
-    // ElevenLabs voices cache
+    // ElevenLabs voices cache (keyed by language code)
+    elevenVoicesCache: {},
     elevenVoices: [],
     elevenVoicesLoading: false,
+    // Map Deepgram language codes to ElevenLabs language label prefixes
+    elevenLangMap: {
+      en: 'English',
+      es: 'Spanish',
+      fr: 'French',
+      de: 'German',
+      it: 'Italian',
+      nl: 'Dutch',
+      ja: 'Japanese',
+    },
 
     // Deepgram Aura-2 voices grouped by language
     dgVoiceLangs: [
@@ -193,20 +204,76 @@ function appData() {
 
     // Redact options
     redactOptions: [
-      { value: 'pci', label: 'PCI' },
-      { value: 'ssn', label: 'SSN' },
-      { value: 'credit_card', label: 'Credit Card' },
-      { value: 'account_number', label: 'Account #' },
-      { value: 'routing_number', label: 'Routing #' },
-      { value: 'passport_number', label: 'Passport' },
-      { value: 'driver_license', label: 'Driver License' },
-      { value: 'numerical_pii', label: 'Numerical PII' },
-      { value: 'numbers', label: 'Numbers' },
-      { value: 'aggressive_numbers', label: 'Aggressive Nums' },
-      { value: 'phi', label: 'PHI' },
-      { value: 'name', label: 'Name' },
-      { value: 'dob', label: 'Date of Birth' },
-      { value: 'username', label: 'Username' },
+      // Groups
+      { value: 'pii', label: 'PII (group)', group: 'Groups' },
+      { value: 'phi', label: 'PHI (group)', group: 'Groups' },
+      { value: 'pci', label: 'PCI (group)', group: 'Groups' },
+      { value: 'numbers', label: 'Numbers (3+ digits)', group: 'Groups' },
+      { value: 'aggressive_numbers', label: 'Aggressive Numbers', group: 'Groups' },
+      { value: 'pin', label: 'PIN', group: 'Groups' },
+      // PII — Identity
+      { value: 'name', label: 'Name', group: 'PII' },
+      { value: 'name_given', label: 'Given Name', group: 'PII' },
+      { value: 'name_family', label: 'Family Name', group: 'PII' },
+      { value: 'name_medical_professional', label: 'Medical Professional Name', group: 'PII' },
+      { value: 'dob', label: 'Date of Birth', group: 'PII' },
+      { value: 'age', label: 'Age', group: 'PII' },
+      { value: 'gender_sexuality', label: 'Gender/Sexuality', group: 'PII' },
+      { value: 'origin', label: 'Origin', group: 'PII' },
+      { value: 'occupation', label: 'Occupation', group: 'PII' },
+      { value: 'physical_attribute', label: 'Physical Attribute', group: 'PII' },
+      { value: 'username', label: 'Username', group: 'PII' },
+      { value: 'password', label: 'Password', group: 'PII' },
+      // PII — Financial
+      { value: 'credit_card', label: 'Credit Card', group: 'PII' },
+      { value: 'credit_card_expiration', label: 'CC Expiration', group: 'PII' },
+      { value: 'cvv', label: 'CVV', group: 'PII' },
+      { value: 'account_number', label: 'Account Number', group: 'PII' },
+      { value: 'bank_account', label: 'Bank Account', group: 'PII' },
+      { value: 'routing_number', label: 'Routing Number', group: 'PII' },
+      { value: 'money', label: 'Money', group: 'PII' },
+      // PII — Government IDs
+      { value: 'ssn', label: 'SSN', group: 'PII' },
+      { value: 'driver_license', label: 'Driver License', group: 'PII' },
+      { value: 'passport_number', label: 'Passport Number', group: 'PII' },
+      { value: 'healthcare_number', label: 'Healthcare Number', group: 'PII' },
+      { value: 'vehicle_id', label: 'Vehicle ID', group: 'PII' },
+      // PII — Contact & Location
+      { value: 'email_address', label: 'Email Address', group: 'PII' },
+      { value: 'phone_number', label: 'Phone Number', group: 'PII' },
+      { value: 'ip_address', label: 'IP Address', group: 'PII' },
+      { value: 'url', label: 'URL', group: 'PII' },
+      { value: 'location', label: 'Location', group: 'PII' },
+      { value: 'location_address', label: 'Address', group: 'PII' },
+      { value: 'location_city', label: 'City', group: 'PII' },
+      { value: 'location_state', label: 'State', group: 'PII' },
+      { value: 'location_country', label: 'Country', group: 'PII' },
+      { value: 'location_zip', label: 'ZIP Code', group: 'PII' },
+      { value: 'location_coordinate', label: 'Coordinate', group: 'PII' },
+      // PII — Numbers & Dates
+      { value: 'numerical_pii', label: 'Numerical PII', group: 'PII' },
+      { value: 'cardinal', label: 'Cardinal Number', group: 'PII' },
+      { value: 'ordinal', label: 'Ordinal Number', group: 'PII' },
+      { value: 'percent', label: 'Percent', group: 'PII' },
+      { value: 'date', label: 'Date', group: 'PII' },
+      { value: 'date_interval', label: 'Date Interval', group: 'PII' },
+      { value: 'time', label: 'Time', group: 'PII' },
+      // PII — Other
+      { value: 'event', label: 'Event', group: 'PII' },
+      { value: 'filename', label: 'Filename', group: 'PII' },
+      { value: 'organization', label: 'Organization', group: 'Other' },
+      { value: 'language', label: 'Language', group: 'Other' },
+      { value: 'marital_status', label: 'Marital Status', group: 'Other' },
+      { value: 'political_affiliation', label: 'Political Affiliation', group: 'Other' },
+      { value: 'religion', label: 'Religion', group: 'Other' },
+      { value: 'zodiac_sign', label: 'Zodiac Sign', group: 'Other' },
+      // PHI
+      { value: 'condition', label: 'Condition', group: 'PHI' },
+      { value: 'drug', label: 'Drug', group: 'PHI' },
+      { value: 'injury', label: 'Injury', group: 'PHI' },
+      { value: 'blood_type', label: 'Blood Type', group: 'PHI' },
+      { value: 'medical_process', label: 'Medical Process', group: 'PHI' },
+      { value: 'statistics', label: 'Statistics', group: 'PHI' },
     ],
 
     // ---- Params ----
@@ -555,22 +622,53 @@ function appData() {
       return this.dgVoices.filter(v => v.lang === this.ttsLang);
     },
 
+    filteredElevenVoices() {
+      // Voices are already fetched per-language from the API.
+      // Client-side filter catches user's own voices that may not match.
+      const label = this.elevenLangMap[this.ttsLang] || '';
+      if (!label) return this.elevenVoices;
+      // Keep shared voices (already language-matched) + user voices matching language
+      return this.elevenVoices.filter(v =>
+        v.source === 'shared' ||
+        !v.language ||
+        v.language.toLowerCase().startsWith(label.toLowerCase())
+      );
+    },
+
     switchTtsLang(lang) {
       this.ttsLang = lang;
-      const voices = this.dgVoices.filter(v => v.lang === lang);
-      if (voices.length && !voices.find(v => v.id === this.ttsModel)) {
-        this.ttsModel = voices[0].id;
+      // Keep STT language in sync so we don't transcribe with the wrong language
+      this.params.language = lang;
+      if (this.ttsProvider === 'elevenlabs') {
+        this.loadElevenVoices(lang).then(() => {
+          const voices = this.filteredElevenVoices();
+          if (voices.length && !voices.find(v => v.voice_id === this.ttsModel)) {
+            this.ttsModel = voices[0].voice_id;
+          }
+        });
+      } else {
+        const voices = this.dgVoices.filter(v => v.lang === lang);
+        if (voices.length && !voices.find(v => v.id === this.ttsModel)) {
+          this.ttsModel = voices[0].id;
+        }
       }
     },
 
-    async loadElevenVoices() {
-      if (this.elevenVoices.length > 0) return;
+    async loadElevenVoices(lang) {
+      lang = lang || this.ttsLang;
+      if (this.elevenVoicesCache[lang]) {
+        this.elevenVoices = this.elevenVoicesCache[lang];
+        return;
+      }
       this.elevenVoicesLoading = true;
       try {
-        const res = await fetch('/api/tts-voices?provider=elevenlabs');
+        const langCode = this.elevenLangMap[lang] ? lang : '';
+        const url = `/api/tts-voices?provider=elevenlabs${langCode ? '&language=' + langCode : ''}`;
+        const res = await fetch(url);
         const data = await res.json();
         if (data.error) throw new Error(data.error);
         this.elevenVoices = data.voices || [];
+        this.elevenVoicesCache[lang] = this.elevenVoices;
       } catch (err) {
         this.showToast('Failed to load ElevenLabs voices: ' + err.message, 'error');
       } finally {
@@ -581,14 +679,13 @@ function appData() {
     switchTtsProvider(provider) {
       this.ttsProvider = provider;
       if (provider === 'elevenlabs') {
-        this.loadElevenVoices();
-        if (!this.ttsModel || this.ttsModel.startsWith('aura-')) {
-          this.ttsModel = '';
-        }
+        this.loadElevenVoices(this.ttsLang).then(() => {
+          const filtered = this.filteredElevenVoices();
+          this.ttsModel = filtered.length ? filtered[0].voice_id : '';
+        });
       } else {
-        if (!this.ttsModel || !this.ttsModel.startsWith('aura-')) {
-          this.ttsModel = 'aura-2-asteria-en';
-        }
+        const voices = this.dgVoices.filter(v => v.lang === this.ttsLang);
+        this.ttsModel = voices.length ? voices[0].id : 'aura-2-asteria-en';
       }
     },
 

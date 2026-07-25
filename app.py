@@ -1,14 +1,17 @@
 import asyncio
+import json as json_mod
 import logging
 import os
 import re
 import tempfile
+import urllib.parse
 from pathlib import Path
 
 from mutagen import File as MutagenFile
 
 import httpx
 import socketio
+import websockets
 from deepgram import AsyncDeepgramClient
 from deepgram.core.events import EventType
 from deepgram.listen.v1.types import ListenV1Results, ListenV1Metadata
@@ -116,6 +119,7 @@ async def _elevenlabs_tts_generate(text: str, voice_id: str, api_key: str) -> by
 async def _stt_batch(audio_bytes: bytes, stt_params: dict, api_key: str) -> dict:
     """Transcribe audio bytes via Deepgram pre-recorded (batch) API."""
     headers = {"Authorization": f"Token {api_key}"}
+    base_url = stt_params.get("base_url", "api.deepgram.com")
     clean = clean_params(stt_params, Mode.BATCH)
     query_params = {}
     for k, v in clean.items():
@@ -129,7 +133,7 @@ async def _stt_batch(audio_bytes: bytes, stt_params: dict, api_key: str) -> dict
 
     async with httpx.AsyncClient(timeout=60.0) as client:
         resp = await client.post(
-            "https://api.deepgram.com/v1/listen",
+            f"https://{base_url}/v1/listen",
             headers={**headers, "Content-Type": "audio/mp3"},
             params=query_params,
             content=audio_bytes,
@@ -142,11 +146,17 @@ async def _stt_streaming(text: str, tts_model: str, stt_params: dict, api_key: s
     """Pipe Deepgram TTS streaming response directly into the STT WebSocket.
     TTS audio chunks are forwarded to STT as they arrive — naturally paced at
     speech speed, no buffering or artificial timing needed.
-    Returns {"transcript": str, "segments": list}.
+    Returns {"transcript": str, "segments": list, "raw_responses": list}.
     """
+    base_url = stt_params.get("base_url", "api.deepgram.com")
+    headers = {"Authorization": f"Token {api_key}"}
+
+    # For custom endpoints (e.g. aiworks), use raw websockets instead of the SDK
+    if base_url != "api.deepgram.com":
+        return await _stt_streaming_raw(text, tts_model, stt_params, api_key)
+
     dg = AsyncDeepgramClient(api_key=api_key)
     sdk_kwargs = _params_to_sdk_kwargs(stt_params)
-    headers = {"Authorization": f"Token {api_key}"}
 
     segments = []
 
@@ -182,33 +192,144 @@ async def _stt_streaming(text: str, tts_model: str, stt_params: dict, api_key: s
     }
 
 
+async def _stt_streaming_raw(text: str, tts_model: str, stt_params: dict, api_key: str) -> dict:
+    """Stream TTS audio into a custom WebSocket STT endpoint (e.g. aiworks).
+    Uses raw websockets since the Deepgram SDK only connects to api.deepgram.com.
+    Returns full raw responses so callers can inspect the response schema.
+    """
+    base_url = stt_params.get("base_url", "api.deepgram.com")
+    clean = clean_params(stt_params, Mode.STREAMING)
+    query_parts = []
+    for k, v in clean.items():
+        if isinstance(v, bool):
+            query_parts.append(f"{k}={'true' if v else 'false'}")
+        elif isinstance(v, list):
+            for item in v:
+                query_parts.append(f"{k}={urllib.parse.quote(str(item))}")
+        else:
+            query_parts.append(f"{k}={urllib.parse.quote(str(v))}")
+    qs = "&".join(query_parts)
+    ws_url = f"wss://{base_url}/v1/listen?{qs}" if qs else f"wss://{base_url}/v1/listen"
+    headers = {"Authorization": f"Token {api_key}"}
+
+    # Generate TTS audio first (full buffer), then stream into WebSocket
+    async with httpx.AsyncClient(timeout=60.0) as client:
+        tts_resp = await client.post(
+            "https://api.deepgram.com/v1/speak",
+            headers={**headers, "Content-Type": "application/json"},
+            params={"model": tts_model, "encoding": "mp3"},
+            json={"text": text},
+        )
+        tts_resp.raise_for_status()
+        audio_bytes = tts_resp.content
+
+    segments = []
+    raw_responses = []
+
+    async with websockets.connect(ws_url, additional_headers=headers) as ws:
+        # Send audio in chunks
+        chunk_size = 4096
+        for i in range(0, len(audio_bytes), chunk_size):
+            await ws.send(audio_bytes[i:i + chunk_size])
+            await asyncio.sleep(0.01)
+
+        # Signal end of audio
+        await ws.send(json_mod.dumps({"type": "CloseStream"}))
+
+        # Collect all responses until connection closes
+        try:
+            async for msg in ws:
+                if isinstance(msg, str):
+                    data = json_mod.loads(msg)
+                    raw_responses.append(data)
+                    # Extract transcript from various response shapes
+                    if "deepgram_stt" in data:
+                        stt = data["deepgram_stt"]
+                        if isinstance(stt, list):
+                            stt = stt[0]
+                        t = stt.get("channel", {}).get("alternatives", [{}])[0].get("transcript", "")
+                        is_final = stt.get("is_final", False)
+                        if t.strip() and is_final:
+                            segments.append(t)
+                    elif data.get("type") == "Results":
+                        t = data.get("channel", {}).get("alternatives", [{}])[0].get("transcript", "")
+                        if t.strip() and data.get("is_final"):
+                            segments.append(t)
+                    elif data.get("type") == "text":
+                        t = data.get("data", "")
+                        if t.strip():
+                            segments.append(t)
+                    # Top-level transcript (aiworks wrapper)
+                    elif "transcript" in data and not any(k in data for k in ("deepgram_stt", "type")):
+                        t = data["transcript"]
+                        if t.strip():
+                            segments.append(t)
+        except websockets.exceptions.ConnectionClosed:
+            pass
+
+    return {
+        "transcript": " ".join(segments),
+        "segments": segments,
+        "raw_responses": raw_responses,
+    }
+
+
 @fastapi_app.get("/api/tts-voices")
-async def tts_voices(provider: str = "elevenlabs"):
-    """Return available voices for a TTS provider."""
+async def tts_voices(provider: str = "elevenlabs", language: str = ""):
+    """Return available voices for a TTS provider, optionally filtered by language.
+
+    For ElevenLabs, fetches both the user's own voices and popular shared
+    voices for the requested language (via the shared-voices library).
+    """
     if provider == "elevenlabs":
         api_key = os.getenv("ELEVENLABS_API_KEY", "")
         if not api_key:
             return JSONResponse({"error": "ELEVENLABS_API_KEY not set"}, status_code=500)
+
+        def _normalize_voice(v, source="user"):
+            labels = v.get("labels") or {}
+            return {
+                "voice_id": v["voice_id"],
+                "name": v["name"],
+                "language": labels.get("language", v.get("language", "")),
+                "accent": labels.get("accent", v.get("accent", "")),
+                "gender": labels.get("gender", v.get("gender", "")),
+                "age": labels.get("age", ""),
+                "description": labels.get("description", v.get("description", "")),
+                "use_case": labels.get("use_case", v.get("use_case", "")),
+                "source": source,
+            }
+
         async with httpx.AsyncClient(timeout=30.0) as client:
+            # Always fetch user's own voices
             resp = await client.get(
                 "https://api.elevenlabs.io/v1/voices",
                 headers={"xi-api-key": api_key},
             )
             resp.raise_for_status()
-            data = resp.json()
-        voices = [
-            {
-                "voice_id": v["voice_id"],
-                "name": v["name"],
-                "accent": v.get("labels", {}).get("accent", ""),
-                "gender": v.get("labels", {}).get("gender", ""),
-                "age": v.get("labels", {}).get("age", ""),
-                "description": v.get("labels", {}).get("description", ""),
-                "use_case": v.get("labels", {}).get("use_case", ""),
-            }
-            for v in data.get("voices", [])
-        ]
-        return JSONResponse({"voices": voices})
+            user_voices = [
+                _normalize_voice(v, "user")
+                for v in resp.json().get("voices", [])
+            ]
+
+            # If a language is specified, also fetch shared voices for it
+            shared_voices = []
+            if language:
+                shared_resp = await client.get(
+                    "https://api.elevenlabs.io/v1/shared-voices",
+                    params={"page_size": 20, "language": language},
+                    headers={"xi-api-key": api_key},
+                )
+                if shared_resp.status_code == 200:
+                    shared_voices = [
+                        _normalize_voice(v, "shared")
+                        for v in shared_resp.json().get("voices", [])
+                    ]
+
+        # Deduplicate (user voices take priority)
+        seen_ids = {v["voice_id"] for v in user_voices}
+        combined = user_voices + [v for v in shared_voices if v["voice_id"] not in seen_ids]
+        return JSONResponse({"voices": combined})
     return JSONResponse({"error": f"Unknown provider: {provider}"}, status_code=400)
 
 
@@ -290,6 +411,7 @@ async def transcribe(request: Request):
         return JSONResponse({"error": "url or filename required"}, status_code=400)
 
     api_key = os.getenv("DEEPGRAM_API_KEY", "")
+    base_url = params.get("base_url", "api.deepgram.com")
 
     # Build clean query params for batch mode, convert bools to lowercase strings
     clean = clean_params(params, Mode.BATCH)
@@ -304,12 +426,13 @@ async def transcribe(request: Request):
     query_params.setdefault("model", "nova-2")
 
     headers = {"Authorization": f"Token {api_key}"}
+    listen_url = f"https://{base_url}/v1/listen"
 
     try:
         async with httpx.AsyncClient(timeout=300.0) as client:
             if url:
                 resp = await client.post(
-                    "https://api.deepgram.com/v1/listen",
+                    listen_url,
                     headers={**headers, "Content-Type": "application/json"},
                     params=query_params,
                     json={"url": url},
@@ -320,7 +443,7 @@ async def transcribe(request: Request):
                     return JSONResponse({"error": "File not found"}, status_code=404)
                 file_bytes = file_path.read_bytes()
                 resp = await client.post(
-                    "https://api.deepgram.com/v1/listen",
+                    listen_url,
                     headers={**headers, "Content-Type": "audio/*"},
                     params=query_params,
                     content=file_bytes,
