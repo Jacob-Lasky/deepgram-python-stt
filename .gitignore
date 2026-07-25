@@ -2,3 +2,9 @@ __pycache__/
 .python-version
 .env
 outputs/*
+
+# Generated evidence from scripts/. Regenerable; keep deliberately, not by accident.
+scripts/*.csv
+
+# Claude Code local overrides
+.claude/settings.local.json

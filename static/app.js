@@ -4,7 +4,7 @@ function appData() {
   return {
 
     // ---- State ----
-    mode: 'mic',         // 'mic' | 'file' | 'batch'
+    mode: 'mic',         // 'mic' | 'file' | 'batch' | 'tts'
     rightTab: 'transcript',
     connected: false,
     socket: null,

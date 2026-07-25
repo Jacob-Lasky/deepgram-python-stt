@@ -110,7 +110,29 @@ Copy `sample.env` to `.env`:
 
 ```env
 DEEPGRAM_API_KEY=your_key_here
+ELEVENLABS_API_KEY=       # optional, only for the ElevenLabs TTS provider
 ```
+
+### Security and abuse limits
+
+This app holds a Deepgram key server-side and calls Deepgram on behalf of
+whoever hits it, so these bound what a caller can do:
+
+| Variable | Default | Purpose |
+|----------|---------|---------|
+| `ALLOWED_STT_HOSTS` | `api.deepgram.com` | Comma-separated allowlist of hosts the `base_url` override may target. A caller-supplied host outside this list is rejected with a 400. Add an AI Works host here to test a flow's `/v1/listen` compat endpoint. |
+| `MAX_TTS_CHARS` | `2000` | Caps TTS text length. TTS bills per character, so this is a spend cap. |
+| `MAX_UPLOAD_BYTES` | `104857600` | Caps upload size. |
+
+**`base_url` is operator-gated on purpose.** It used to accept any host and
+forwarded the server's `Authorization: Token <key>` header there, which leaked
+the key to a destination the caller picked. Do not relax the allowlist to
+accept caller-supplied hosts.
+
+**Every endpoint is still unauthenticated.** The caps above limit the blast
+radius; they do not stop an anonymous caller from spending the key's budget.
+Put the app behind auth before sharing the URL widely, and use a scoped
+Deepgram key rather than an org-wide one.
 
 ---
 
@@ -143,7 +165,7 @@ All values below are verified to work with the Deepgram streaming API:
 uv run pytest tests/ -v
 ```
 
-30 tests, 1 skipped. Tests use a real `UvicornTestServer` + `socketio.AsyncClient` — no mocking of the SocketIO layer.
+58 tests, 1 skipped. Tests use a real `UvicornTestServer` + `socketio.AsyncClient` — no mocking of the SocketIO layer.
 
 <!-- TODO: add screenshot of batch mode -->
 <!-- ![Deepgram STT Explorer — Batch Mode](docs/images/stt-batch.png) -->
@@ -161,6 +183,8 @@ Non-obvious things discovered during the Flask/gevent → FastAPI async migratio
 - **Audio `timeslice` must be 250ms** — 1000ms chunks cause the last word before Stop to be dropped
 - **`stream_started` must emit immediately on WS connect**, not after `Metadata` — Metadata timing is non-deterministic and can block the frontend for 10+ seconds
 - **Deepgram boolean params must be lowercase strings** (`"true"`/`"false"`), not Python bools
+- **Never join a caller-supplied filename onto a directory** — Python's `Path` join *replaces* the base when the right side is absolute, so `TEMP_DIR / "/etc/passwd"` is `/etc/passwd`. Take `Path(name).name` and assert the resolved parent.
+- **Never interpolate a caller-supplied host into a URL that carries your API key** — it forwards the credential to whatever host they named.
 
 ---
 
@@ -171,6 +195,11 @@ fly launch --name your-app-name   # first time only
 fly secrets set DEEPGRAM_API_KEY=your_key_here
 fly deploy
 ```
+
+Pushing to `main` also deploys, via `.github/workflows/fly-deploy.yml`. That
+workflow has no test gate, so run `uv run pytest tests/ -q` first. **Check
+whether the running app is ahead of `main` before you push:** deploying `main`
+while production carries newer code silently reverts it.
 
 The `fly.toml` and `Dockerfile` are already configured for uvicorn on port 8080.
 

@@ -1,14 +1,14 @@
 [project]
-name = "flask-live-transcription"
+name = "deepgram-stt-explorer"
 version = "0.1.0"
-description = ""
+description = "Interactive explorer for Deepgram speech-to-text parameters"
 authors = [{ name = "Jacob-Lasky", email = "jacob.s.lasky@gmail.com" }]
 requires-python = ">=3.12, <3.13"
 readme = "README.md"
 dependencies = [
     "deepgram-sdk==6.0.1",
     "fastapi>=0.115.0,<1",
-    "python-socketio[asyncio]>=5.11.0,<6",
+    "python-socketio>=5.11.0,<6",
     "uvicorn>=0.30.0,<1",
     "httpx>=0.27.0,<1",
     "python-multipart>=0.0.9,<1",
@@ -20,7 +20,10 @@ dependencies = [
 
 [tool.uv]
 package = false
-dev-dependencies = [
+
+# uv deprecated [tool.uv] dev-dependencies in favour of PEP 735 dependency-groups.
+[dependency-groups]
+dev = [
     "aiohttp>=3.9.0",
     "pytest>=8.0",
     "pytest-asyncio>=0.23,<1.0",
