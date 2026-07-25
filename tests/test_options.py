@@ -17,11 +17,30 @@ def test_removes_falsy_values():
     assert result["model"] == "nova-3"
 
 
-def test_keeps_zero_numerics():
-    # clean_params does NOT strip 0 — callers are responsible for omitting defaults
-    result = clean_params({"alternatives": 0, "channels": 0}, Mode.STREAMING)
-    assert result["alternatives"] == 0
-    assert result["channels"] == 0
+def test_zero_is_dropped_only_where_zero_means_unset():
+    """The UI renders sample_rate, channels and alternatives as 0 when unset, and
+    Deepgram returns 400 for sample_rate=0 / channels=0 — verified live. So 0 on
+    those is "omit", not "zero".
+
+    This test previously asserted the opposite ("callers are responsible for
+    omitting defaults"). No caller did, so the UI's own defaults produced a live
+    400 on every batch request that touched them.
+    """
+    result = clean_params(
+        {"alternatives": 0, "channels": 0, "sample_rate": 0}, Mode.STREAMING
+    )
+    assert result == {}
+
+    # A non-zero value still goes through; only the sentinel is dropped.
+    result = clean_params({"channels": 2, "sample_rate": 16000}, Mode.STREAMING)
+    assert result == {"channels": 2, "sample_rate": 16000}
+
+
+def test_zero_is_preserved_where_zero_is_meaningful():
+    """DO NOT generalise the rule above to all zeroes. endpointing=0 disables
+    endpointing, so dropping it would silently change behaviour."""
+    result = clean_params({"endpointing": 0}, Mode.STREAMING)
+    assert result["endpointing"] == 0
 
 
 def test_removes_false_booleans():
@@ -155,10 +174,41 @@ def test_sdk_accepts_every_serialized_param_name():
     assert via_kwargs <= accepted, f"would raise TypeError at connect(): {sorted(via_kwargs - accepted)}"
     dropped = emitted - via_kwargs - via_query
     assert not dropped, f"params silently dropped, never reaching Deepgram: {sorted(dropped)}"
-    # These are real Deepgram params the SDK does not enumerate; they must be
-    # routed, not lost. Regression guard for the keyterms crash class.
-    for name in ("filler_words", "no_delay", "word_confidence"):
+    # Real Deepgram params the SDK does not enumerate; they must be routed, not
+    # lost. Regression guard for the keyterms crash class. filler_words is NOT in
+    # this list: Deepgram's docs mark it stream-unavailable, so it is stripped in
+    # streaming mode by design — see test_stream_unavailable_params_are_stripped.
+    for name in ("no_delay", "word_confidence", "diarize_version", "entity_prompt"):
         assert name in via_query, f"{name} is not being forwarded"
+
+
+def test_stream_unavailable_params_are_stripped_in_streaming():
+    """Deepgram's docs mark these stream-unavailable, and a batch-only param sent
+    to a stream is SILENTLY IGNORED — so leaving them in meant the feature under
+    test was never applied and the run looked valid. Batch keeps them."""
+    from stt.options import clean_params, Mode
+    for name in ("filler_words", "measurements", "utt_split", "detect_language"):
+        assert name not in clean_params({name: True}, Mode.STREAMING), name
+        assert name in clean_params({name: True}, Mode.BATCH), name
+
+
+def test_batch_unavailable_params_are_stripped_in_batch():
+    """Docs mark these batch-unavailable. sample_rate and channels additionally
+    returned a live 400 from Deepgram when forwarded to batch."""
+    from stt.options import clean_params, Mode
+    for name, value in (("channels", 2), ("encoding", "linear16"), ("sample_rate", 16000)):
+        assert name not in clean_params({name: value}, Mode.BATCH), name
+        assert name in clean_params({name: value}, Mode.STREAMING), name
+
+
+def test_alternatives_is_not_mode_gated():
+    """`alternatives` is MODEL-dependent, not mode-dependent, and this distinction
+    cost a wrong fix. alternatives=2 returns 400 on nova-3/nova-2 but 200 on base
+    and enhanced, in BOTH batch and streaming (verified live). Mode-gating it
+    would break the legacy-model config replication this tool exists to do."""
+    from stt.options import clean_params, Mode
+    for mode in (Mode.BATCH, Mode.STREAMING):
+        assert clean_params({"alternatives": 2}, mode) == {"alternatives": 2}
 
 
 def test_nova2_keywords_is_not_supported():

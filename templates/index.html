@@ -1285,7 +1285,11 @@
                 <input type="checkbox" id="numerals" x-model="params.numerals">
                 <label for="numerals">Numerals</label>
               </div>
-              <div class="checkbox-item">
+              <!-- Batch only (docs: stt-stream-unavailable). Hidden rather than
+                   shown-and-ignored: Deepgram drops a stream-unavailable param
+                   silently, so a checkbox that does nothing reads as a broken
+                   feature. stt/options.py BATCH_ONLY strips it server-side. -->
+              <div class="checkbox-item" x-show="mode === 'batch'">
                 <input type="checkbox" id="filler_words" x-model="params.filler_words">
                 <label for="filler_words">Filler Words</label>
               </div>
@@ -1323,11 +1327,14 @@
                 <input type="checkbox" id="detect_entities" x-model="params.detect_entities">
                 <label for="detect_entities">Detect Entities</label>
               </div>
-              <div class="checkbox-item">
+              <!-- Batch only (docs: stt-stream-unavailable), same reasoning as
+                   Filler Words above: silently ignored on a stream, so hide it
+                   rather than offer a control that cannot work. -->
+              <div class="checkbox-item" x-show="mode === 'batch'">
                 <input type="checkbox" id="utterances" x-model="params.utterances">
                 <label for="utterances">Utterances</label>
               </div>
-              <div class="checkbox-item">
+              <div class="checkbox-item" x-show="mode === 'batch'">
                 <input type="checkbox" id="paragraphs" x-model="params.paragraphs">
                 <label for="paragraphs">Paragraphs</label>
               </div>
