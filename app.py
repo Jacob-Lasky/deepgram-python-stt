@@ -324,7 +324,50 @@ fastapi_app.mount("/static", StaticFiles(directory="static"), name="static")
 app = socketio.ASGIApp(sio, fastapi_app)
 
 def _clean_error(e: Exception) -> str:
-    """Strip SDK request headers (including auth token) from Deepgram exception messages."""
+    """Turn a Deepgram failure into the most specific message we can safely show.
+
+    DO NOT weaken the header stripping below. SDK exception messages embed the
+    full request, Authorization header included, so returning str(e) verbatim
+    would put the server's API key in an HTTP response body.
+
+    For httpx failures we substitute Deepgram's RESPONSE body, which is where the
+    actual reason lives. str(HTTPStatusError) is only
+        Client error '400 Bad Request' for url '...'
+        For more information check: https://developer.mozilla.org/...
+    which names neither the offending parameter nor the reason, and an MDN link
+    to "what is a 400" is worse than useless in a diagnostic tool: the whole
+    point of this app is to tell someone WHY Deepgram rejected their request.
+    A response body is safe to surface — credentials travel in request headers.
+    """
+    if isinstance(e, httpx.HTTPStatusError):
+        status = e.response.status_code
+        try:
+            body = e.response.json()
+            detail = body.get("err_msg") or body.get("error") or body.get("message")
+            code = body.get("err_code")
+            if detail:
+                return f"Deepgram {status}: {detail}" + (f" ({code})" if code else "")
+            return f"Deepgram {status}: {json_mod.dumps(body)[:500]}"
+        except ValueError:
+            text = (e.response.text or "").strip()
+            return f"Deepgram {status}: {text[:500]}" if text else f"Deepgram {status}"
+
+    if isinstance(e, websockets.exceptions.ConnectionClosed):
+        # Deepgram rejects an unsupported parameter on a STREAM by completing the
+        # handshake and then closing with code 1000 and NO reason, so websockets
+        # reports only "received 1000 (OK); then sent 1000 (OK)". That names
+        # neither the parameter nor the cause, and it reads like a clean shutdown
+        # rather than a rejection. Verified live: alternatives=2 on nova-3 closes
+        # this way, while the same request in batch mode returns a 400.
+        return (
+            f"Deepgram closed the stream immediately without transcribing ({e}). "
+            "A close with no reason is what an unsupported parameter looks like on "
+            "a stream — most often a parameter the chosen model does not accept "
+            "(e.g. alternatives>1 on nova-*, which is valid on base and enhanced). "
+            "Re-run the same parameters in batch mode: there Deepgram returns a "
+            "400 stating the actual reason."
+        )
+
     msg = str(e)
     m = re.search(r'status_code:\s*(\d+),\s*body:\s*(.+)$', msg, re.DOTALL)
     if m:
@@ -696,7 +739,9 @@ async def tts_transcribe(request: Request):
             return JSONResponse({"batch": batch_result, "streaming": stream_result})
 
     except httpx.HTTPStatusError as e:
-        return JSONResponse({"error": str(e)}, status_code=e.response.status_code)
+        # _clean_error, never str(e): it surfaces Deepgram's reason and strips
+        # request headers. This handler used str(e) and returned an MDN link.
+        return JSONResponse({"error": _clean_error(e)}, status_code=e.response.status_code)
     except Exception as e:
         return JSONResponse({"error": _clean_error(e)}, status_code=500)
 

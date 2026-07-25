@@ -84,7 +84,6 @@ async def test_passthrough_params_reach_the_wire():
     """
     params = {
         "model": "nova-3",
-        "filler_words": True,
         "no_delay": True,
         "word_confidence": True,
         "alternatives": 3,
@@ -93,7 +92,6 @@ async def test_passthrough_params_reach_the_wire():
     }
     pairs = _pairs(await _handshake_path(params))
     for expected in (
-        ("filler_words", "true"),
         ("no_delay", "true"),
         ("word_confidence", "true"),
         ("alternatives", "3"),
@@ -101,6 +99,11 @@ async def test_passthrough_params_reach_the_wire():
         ("entity_prompt", "patient names"),
     ):
         assert expected in pairs, f"{expected[0]} never reached the wire: {pairs}"
+
+    # filler_words is the sixth of that group, but Deepgram's docs mark it
+    # stream-unavailable, so on a STREAM it must be stripped rather than
+    # forwarded and silently ignored. It reaches the wire in batch mode instead.
+    assert "filler_words" not in [k for k, _ in pairs]
 
 
 @pytest.mark.asyncio
@@ -157,3 +160,73 @@ async def test_base_url_is_never_forwarded_to_deepgram():
     would leak internal endpoint names into Deepgram's request logs."""
     path = await _handshake_path({"model": "nova-3", "base_url": "api.deepgram.com"})
     assert "base_url" not in [k for k, _ in _pairs(path)]
+
+
+def test_clean_error_surfaces_deepgrams_reason_not_an_mdn_link():
+    """A diagnostic tool must report WHY Deepgram refused the request.
+
+    str(httpx.HTTPStatusError) is only "Client error '400 Bad Request' for url
+    ... For more information check: <MDN link>", which names neither the
+    parameter nor the cause. This handler used to return exactly that.
+    """
+    import httpx
+
+    import app as app_mod
+
+    request = httpx.Request("POST", "https://api.deepgram.com/v1/listen?alternatives=2")
+    response = httpx.Response(
+        400,
+        json={"err_code": "Bad Request", "err_msg": "alternatives is not supported for this model"},
+        request=request,
+    )
+    err = httpx.HTTPStatusError("boom", request=request, response=response)
+
+    msg = app_mod._clean_error(err)
+    assert "alternatives is not supported for this model" in msg
+    assert "Deepgram 400" in msg
+    assert "developer.mozilla.org" not in msg
+
+
+def test_clean_error_handles_a_non_json_body():
+    import httpx
+
+    import app as app_mod
+
+    request = httpx.Request("POST", "https://api.deepgram.com/v1/listen")
+    response = httpx.Response(502, text="upstream unavailable", request=request)
+    err = httpx.HTTPStatusError("boom", request=request, response=response)
+    assert app_mod._clean_error(err) == "Deepgram 502: upstream unavailable"
+
+
+def test_clean_error_explains_an_immediate_stream_close():
+    """Deepgram rejects an unsupported param on a stream by closing with 1000 and
+    no reason, which websockets reports as "received 1000 (OK)". That reads like a
+    clean shutdown, so the message must say it is a rejection and how to get the
+    real reason."""
+    import websockets.exceptions
+    import websockets.frames
+
+    import app as app_mod
+
+    # Reproduces the exact shape seen in production: close received, then sent,
+    # both code 1000 with an empty reason. rcvd_then_sent must be non-None when
+    # both frames are present (websockets asserts this).
+    close = websockets.frames.Close(1000, "")
+    err = websockets.exceptions.ConnectionClosedOK(close, close, True)
+    msg = app_mod._clean_error(err)
+    assert "closed the stream immediately" in msg
+    assert "batch mode" in msg  # tells the user how to get the actual reason
+
+
+def test_clean_error_still_strips_sdk_request_headers():
+    """Load-bearing: SDK exception messages embed the full request including the
+    Authorization header, so this must never degrade into returning str(e)."""
+    import app as app_mod
+
+    e = Exception(
+        "ApiError: request: POST /v1/listen headers: {'Authorization': 'Token sk-secret'} "
+        "status_code: 401, body: {'err_msg': 'Invalid credentials'}"
+    )
+    msg = app_mod._clean_error(e)
+    assert "sk-secret" not in msg
+    assert "Invalid credentials" in msg

@@ -8,11 +8,50 @@ class Mode(str, Enum):
     BOTH = "both"
 
 
-# Params that are ONLY valid in streaming mode
-STREAMING_ONLY = {"interim_results", "vad_events", "endpointing", "utterance_end_ms", "no_delay"}
+# Mode gating, taken from Deepgram's own docs capability matrix. Each STT feature
+# page carries machine-readable markers, e.g. filler-words.mdx has
+#   <Markdown src="/snippets/stt-batch-available.mdx" />
+#   <Markdown src="/snippets/stt-stream-unavailable.mdx" />
+# so these two sets are transcribed from `stt-stream-unavailable` and
+# `stt-batch-unavailable` respectively. DO NOT add a param here from memory:
+# check the feature's page in deepgram-docs, because guessing wrong in either
+# direction is invisible. Sending a batch-only param to streaming is SILENTLY
+# IGNORED (the feature you think you are testing was never applied), and
+# stripping a param that is actually valid is equally silent.
+#
+# Params that are ONLY valid in streaming mode (docs: stt-batch-unavailable)
+STREAMING_ONLY = {
+    "interim_results",
+    "vad_events",
+    "endpointing",
+    "utterance_end_ms",
+    "no_delay",
+    "channels",
+    "encoding",
+    "sample_rate",
+}
 
-# Params that are ONLY valid in batch mode
-BATCH_ONLY = {"paragraphs", "topics", "intents", "sentiment", "utterances"}
+# Params that are ONLY valid in batch mode (docs: stt-stream-unavailable)
+BATCH_ONLY = {
+    "paragraphs",
+    "topics",
+    "intents",
+    "sentiment",
+    "utterances",
+    "filler_words",
+    "measurements",
+    "utt_split",
+    "detect_language",
+}
+
+# Numeric params where the UI's default of 0 means "unset", not "zero". Both of
+# these fields render as 0 in the params panel, and Deepgram returns 400 for
+# `sample_rate=0` or `channels=0`, so forwarding the default broke every batch
+# request that touched them.
+#
+# DO NOT generalise this to "drop all zeroes". `endpointing=0` is meaningful: it
+# disables endpointing. That is why this is an explicit set and not a rule.
+ZERO_MEANS_UNSET = {"sample_rate", "channels", "alternatives"}
 
 # Params that should never be sent to Deepgram (handled by client)
 INTERNAL_PARAMS = {"base_url"}
@@ -110,6 +149,8 @@ def clean_params(params: dict, mode: Mode) -> dict:
         if value is None or value == "" or value == [] or value == {}:
             continue
         if isinstance(value, bool) and not value:
+            continue
+        if wire in ZERO_MEANS_UNSET and value in (0, "0"):
             continue
         _put(result, wire, value)
 
