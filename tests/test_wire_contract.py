@@ -230,3 +230,37 @@ def test_clean_error_still_strips_sdk_request_headers():
     msg = app_mod._clean_error(e)
     assert "sk-secret" not in msg
     assert "Invalid credentials" in msg
+
+
+def test_clean_error_does_not_repeat_the_error_code():
+    """Deepgram usually prefixes err_msg with err_code, so appending it
+    unconditionally produced "Bad Request: ... (Bad Request)". Observed live."""
+    import httpx
+
+    import app as app_mod
+
+    request = httpx.Request("POST", "https://api.deepgram.com/v1/listen")
+    response = httpx.Response(
+        400,
+        json={
+            "err_code": "Bad Request",
+            "err_msg": "Bad Request: Nova-3 models do not support more than one alternative.",
+        },
+        request=request,
+    )
+    msg = app_mod._clean_error(
+        httpx.HTTPStatusError("boom", request=request, response=response)
+    )
+    assert msg == (
+        "Deepgram 400: Bad Request: Nova-3 models do not support more than one alternative."
+    )
+
+    # A code that adds information is still appended.
+    response = httpx.Response(
+        400, json={"err_code": "INVALID_PARAM", "err_msg": "something went wrong"},
+        request=request,
+    )
+    msg = app_mod._clean_error(
+        httpx.HTTPStatusError("boom", request=request, response=response)
+    )
+    assert msg == "Deepgram 400: something went wrong (INVALID_PARAM)"

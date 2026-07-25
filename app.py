@@ -346,7 +346,12 @@ def _clean_error(e: Exception) -> str:
             detail = body.get("err_msg") or body.get("error") or body.get("message")
             code = body.get("err_code")
             if detail:
-                return f"Deepgram {status}: {detail}" + (f" ({code})" if code else "")
+                # Deepgram often prefixes err_msg with err_code already
+                # ("Bad Request: Nova-3 models do not support..."), so appending
+                # it unconditionally reads as "... (Bad Request)" twice.
+                if code and str(code).lower() not in str(detail).lower():
+                    return f"Deepgram {status}: {detail} ({code})"
+                return f"Deepgram {status}: {detail}"
             return f"Deepgram {status}: {json_mod.dumps(body)[:500]}"
         except ValueError:
             text = (e.response.text or "").strip()
