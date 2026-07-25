@@ -4,13 +4,19 @@ TTS→STT round-trip test for rare medical "-rrhaphy" terms.
 Runs triplicates without keyterms, then triplicates with keyterms.
 Uses the /api/tts-transcribe endpoint on deepgram-python-stt.fly.dev.
 """
-import os
-import httpx
-import json
 import csv
+import json
+import os
 import sys
 from datetime import datetime
 from pathlib import Path
+
+import httpx
+from dotenv import load_dotenv
+
+# Reads APP_ACCESS_TOKEN from the repo's gitignored .env so the harness gets the
+# privileged (un-rate-limited) tier. Must run before the getenv calls below.
+load_dotenv()
 
 # Output lands next to this script. DO NOT hardcode an absolute /coding path:
 # it pins the harness to one machine.
@@ -59,8 +65,11 @@ def run_test(use_keyterms: bool) -> list[dict]:
     rows = []
     stt_params = {"model": STT_MODEL, "smart_format": True}
     if use_keyterms:
-        # keyterms with intensifier boost
-        stt_params["keyterms"] = list(TERMS)
+        # Keyterm Prompting: bare terms, no intensifiers (that is `keywords`).
+        # Canonical Deepgram wire name. stt.options.PARAM_ALIASES also maps the
+        # UI's plural "keyterms", but be explicit here: sending the wrong name
+        # to the batch API is silently ignored, which invalidated an earlier run.
+        stt_params["keyterm"] = list(TERMS)
 
     label = "WITH keyterms" if use_keyterms else "WITHOUT keyterms"
     print(f"\n{'='*60}")
