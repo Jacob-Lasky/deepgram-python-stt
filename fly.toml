@@ -11,6 +11,10 @@ primary_region = 'iad'
 
 [env]
   PORT = "8080"
+  # Assert the API token gate is on. If APP_ACCESS_TOKEN is not set as a fly
+  # secret the app refuses to boot, so a forgotten secret fails the deploy
+  # loudly instead of quietly serving an open API that spends the Deepgram key.
+  REQUIRE_AUTH = "true"
 
 [http_service]
   internal_port = 8080

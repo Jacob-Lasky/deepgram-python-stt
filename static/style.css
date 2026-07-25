@@ -1329,3 +1329,27 @@ h1 {
   border: 1px solid rgba(239, 68, 68, 0.3);
   color: #fca5a5;
 }
+
+/* Access-tier banner. Shown to anonymous visitors to explain the demo budget,
+   and switched to the warning colour when a limit is actually hit. */
+.tier-banner {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 18px;
+  font-size: 13px;
+  background: #1d2433;
+  color: #c9d4e5;
+  border-bottom: 1px solid #2c3648;
+}
+.tier-banner code {
+  background: #111722;
+  padding: 1px 5px;
+  border-radius: 3px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+.tier-banner-limit {
+  background: #3a1d22;
+  color: #f3c9cf;
+  border-bottom-color: #5c2b33;
+}

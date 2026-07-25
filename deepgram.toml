@@ -1,17 +1,20 @@
 [meta]
-  title = "Flask Live Transcription Starter"
-  description = "Get started using Deepgram's Live Transcription with this Flask demo app"
-  author = "Deepgram DX Team <devrel@deepgram.com> (https://developers.deepgram.com)"
+  title = "Deepgram STT Explorer"
+  description = "Interactive app for exploring every Deepgram speech-to-text parameter over mic, file, batch, and TTS round-trip modes"
+  author = "Jacob-Lasky"
   useCase = "Live STT"
   language = "Python"
-  framework = "Flask"
+  framework = "FastAPI"
 
 [build]
-  command = "pip install -r requirements.txt"
+  # uv + pyproject.toml is the single source of dependency truth.
+  # DO NOT change this back to pip and requirements.txt: those files described
+  # the dead v1 Flask/gevent stack and were removed.
+  command = "uv sync --frozen"
 
 [config]
   sample = "sample.env"
   output = ".env"
 
 [post-build]
-  message = "Run `python app.py` to get up and running." # message to give users once setup is complete
+  message = "Run `uv run uvicorn app:app --port 8080` to get up and running."

@@ -1,105 +1,80 @@
 name: Update Deepgram SDK
 
+# Opens a PR when a newer deepgram-sdk is published.
+#
+# The pin lives in exactly ONE place: [project] dependencies in pyproject.toml,
+# resolved through uv.lock. DO NOT reintroduce requirements.txt here. The
+# previous version of this workflow edited requirements.txt and then ran
+# `pip install -r requirements.txt`, which pulled the dead v1 Flask stack
+# (Flask 3.0.0, deepgram-sdk v3.10.1) on Python 3.10 against a project that
+# requires >=3.12. It could only no-op or open a broken PR, and it left roughly
+# a dozen abandoned update-deepgram-sdk-v* branches on the remote.
+
 on:
   schedule:
-    - cron: "0 0 * * 1" # Runs every Monday at midnight
+    - cron: "0 0 * * 1" # Every Monday at midnight UTC
   workflow_dispatch:
+
+permissions:
+  contents: write
+  pull-requests: write
 
 jobs:
   check-update:
     runs-on: ubuntu-latest
-
     steps:
-      - name: Checkout repository
-        uses: actions/checkout@v3
+      - uses: actions/checkout@v7
 
+      - name: Install uv
+        # Exact pin, not a floating major: setup-uv's newest release is v9.0.0
+        # but its floating major tags stop at v7, so `@v9` does not resolve.
+        uses: astral-sh/setup-uv@v9.0.0
+        with:
+          enable-cache: true
+
+      # Read the interpreter from pyproject's requires-python rather than
+      # hardcoding a version that can drift away from the project.
       - name: Set up Python
-        uses: actions/setup-python@v4
+        run: uv python install
+
+      - name: Resolve current and latest deepgram-sdk
+        id: versions
+        run: |
+          set -euo pipefail
+          CURRENT=$(uv run python -c "import importlib.metadata as m; print(m.version('deepgram-sdk'))")
+          LATEST=$(curl -fsSL https://pypi.org/pypi/deepgram-sdk/json | jq -r '.info.version')
+          echo "current=$CURRENT" >> "$GITHUB_OUTPUT"
+          echo "latest=$LATEST"  >> "$GITHUB_OUTPUT"
+          echo "Current: $CURRENT  Latest: $LATEST"
+
+      - name: Bump the pin and lockfile
+        if: steps.versions.outputs.current != steps.versions.outputs.latest
+        run: |
+          set -euo pipefail
+          uv add "deepgram-sdk==${{ steps.versions.outputs.latest }}"
+          uv lock
+
+      - name: Run tests against the new version
+        if: steps.versions.outputs.current != steps.versions.outputs.latest
+        env:
+          # A fake key is correct here: the suite asserts on wiring and accepts
+          # a Deepgram 401. It must never need a real credential to run.
+          DEEPGRAM_API_KEY: ci-test-key
+        run: uv run pytest tests/ -q
+
+      - name: Open a PR
+        if: steps.versions.outputs.current != steps.versions.outputs.latest
+        uses: peter-evans/create-pull-request@v8
         with:
-          python-version: "3.10"
+          branch: chore/deepgram-sdk-${{ steps.versions.outputs.latest }}
+          delete-branch: true
+          title: "chore: update deepgram-sdk to ${{ steps.versions.outputs.latest }}"
+          commit-message: "chore: update deepgram-sdk to ${{ steps.versions.outputs.latest }}"
+          body: |
+            Bumps `deepgram-sdk` from `${{ steps.versions.outputs.current }}`
+            to `${{ steps.versions.outputs.latest }}` in `pyproject.toml` and
+            `uv.lock`.
 
-      - name: Install required tools
-        run: sudo apt-get install -y jq curl
-
-      - name: Get current Deepgram Python SDK version
-        id: get-deepgram-version
-        run: |
-          DEEPGRAM_VERSION=$(curl -s https://api.github.com/repos/deepgram/deepgram-python-sdk/releases/latest | jq -r '.tag_name')
-          echo "version=$DEEPGRAM_VERSION" >> $GITHUB_ENV
-
-      - name: Check installed Deepgram SDK version
-        id: check-installed-version
-        run: |
-          INSTALLED_VERSION=$(pip show deepgram-sdk | grep Version | cut -d' ' -f2)
-          echo "installed_version=$INSTALLED_VERSION" >> $GITHUB_ENV
-
-      - name: Config git
-        env:
-          GITHUB_TOKEN: ${{ secrets.GH_RELEASE_ACCESS_TOKEN }}
-        shell: bash
-        run: |
-          git config --global user.name "github-actions[bot]"
-          git config --global user.email "github-actions[bot]@users.noreply.github.com"
-          git config --global init.defaultBranch main
-          git config --global pull.rebase true
-          git config --global url."https://git:$GITHUB_TOKEN@github.com".insteadOf "https://github.com"
-
-      - name: Compare versions and update if necessary
-        env:
-          GITHUB_TOKEN: ${{ secrets.GH_RELEASE_ACCESS_TOKEN }}
-        run: |
-          LATEST_VERSION=${{ env.version }}
-          INSTALLED_VERSION=${{ env.installed_version }}
-
-          if [ "$LATEST_VERSION" != "$INSTALLED_VERSION" ]; then
-            echo "Updating Deepgram SDK from $INSTALLED_VERSION to $LATEST_VERSION"
-            pip install deepgram-sdk==$LATEST_VERSION
-            
-            # Update requirements.txt
-            sed -i "s/deepgram-sdk==.*/deepgram-sdk==$LATEST_VERSION/" requirements.txt
-            git add requirements.txt
-            
-            # Create a new branch and commit changes
-            BRANCH_NAME="update-deepgram-sdk-$LATEST_VERSION"
-            git checkout -b "$BRANCH_NAME"
-            git commit -m "chore: update Deepgram SDK to $LATEST_VERSION"
-            
-            # Push the new branch and create a PR
-            git push origin "$BRANCH_NAME"
-            gh pr create --title "chore: update Deepgram SDK to $LATEST_VERSION" --body "This PR updates the Deepgram SDK to version $LATEST_VERSION." --base "main" --head "$BRANCH_NAME"
-          else
-            echo "Deepgram SDK is up to date"
-          fi
-
-      - name: Install dependencies
-        run: pip install -r requirements.txt
-
-      - name: Install dev dependencies
-        run: pip install -r requirements-dev.txt
-
-      - name: Run tests
-        env:
-          DEEPGRAM_API_KEY: ${{ secrets.DEEPGRAM_API_KEY }}
-        run: pytest tests/
-
-      - name: Notify on failure
-        if: failure()
-        uses: slackapi/slack-github-action@v1.23.0
-        with:
-          payload: |
-            {
-              "text": "The tests have FAILED for ${{ github.repository }}."
-            }
-        env:
-          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
-
-      - name: Notify on success
-        if: success()
-        uses: slackapi/slack-github-action@v1.23.0
-        with:
-          payload: |
-            {
-              "text": "The tests have passed for ${{ github.repository }}."
-            }
-        env:
-          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
+            The test suite passed against the new version in CI. A major bump
+            can still change the streaming API shape, so check
+            `.planning/research/STACK.md` before merging one.

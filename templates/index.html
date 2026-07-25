@@ -968,6 +968,20 @@
     <span x-text="toast.message"></span>
   </div>
 
+  <!-- Access-tier banner. An anonymous visitor gets a working app under limits,
+       so the banner explains the budget rather than blocking anything. Without
+       it, hitting a limit looks like a broken page. -->
+  <div x-cloak x-show="limitNotice || (tier.known && !tier.privileged)"
+       class="tier-banner" :class="limitNotice ? 'tier-banner-limit' : ''">
+    <i :class="limitNotice ? 'fas fa-exclamation-circle' : 'fas fa-info-circle'"></i>
+    <span x-show="limitNotice" x-text="limitNotice"></span>
+    <span x-show="!limitNotice && tier.known && !tier.privileged">
+      Demo mode: streams stop after <span x-text="tier.maxStreamSeconds"></span>s and
+      TTS text is capped at <span x-text="tier.maxTtsChars"></span> characters.
+      Open this page with <code>?token=YOUR_TOKEN</code> for unlimited use.
+    </span>
+  </div>
+
   <div class="app-layout">
 
     <!-- ======= LEFT PANEL ======= -->
@@ -1097,8 +1111,28 @@
                     style="resize:vertical;min-height:80px;font-family:inherit;"></textarea>
                 </div>
                 <div class="field">
-                  <div class="field-label">TTS Voice</div>
-                  <input class="field-input" x-model="ttsModel" placeholder="aura-2-asteria-en">
+                  <div class="field-label">Language</div>
+                  <div style="display:flex;gap:3px;flex-wrap:wrap;">
+                    <template x-for="l in dgVoiceLangs" :key="l.code">
+                      <button class="action-btn btn-sm"
+                        :class="ttsLang === l.code ? 'btn-primary' : 'btn-secondary'"
+                        style="padding:3px 8px;font-size:12px;"
+                        @click="switchTtsLang(l.code)"
+                        x-text="l.label">
+                      </button>
+                    </template>
+                  </div>
+                </div>
+                <div class="field">
+                  <div class="field-label">Voice</div>
+                  <select class="field-input" x-model="ttsModel"
+                    style="background:#111827;color:#e5e7eb;border:1px solid #374151;padding:6px 8px;border-radius:6px;">
+                    <template x-for="v in filteredDgVoices()" :key="v.id">
+                      <option :value="v.id"
+                        x-text="`${v.name} (${v.accent}, ${v.gender === 'M' ? 'Male' : v.gender === 'F' ? 'Female' : v.gender})`">
+                      </option>
+                    </template>
+                  </select>
                 </div>
                 <div class="field">
                   <div class="field-label">STT Mode</div>
@@ -1113,8 +1147,15 @@
                     </template>
                   </div>
                 </div>
+                <!-- Language mismatch warning -->
+                <div x-show="params.language && params.language !== ttsLang && params.language !== 'multi'"
+                  style="background:#78350f;border:1px solid #92400e;border-radius:6px;padding:6px 10px;font-size:12px;color:#fbbf24;">
+                  <i class="fas fa-exclamation-triangle" style="margin-right:4px;"></i>
+                  TTS language (<span x-text="ttsLang"></span>) differs from STT language (<span x-text="params.language"></span>).
+                  Transcription may be inaccurate.
+                </div>
                 <button class="action-btn btn-primary"
-                  :disabled="ttsLoading || !ttsText.trim()"
+                  :disabled="ttsLoading || !ttsText.trim() || !ttsModel"
                   @click="runTts()">
                   <i :class="ttsLoading ? 'fas fa-spinner fa-spin' : 'fas fa-comment-dots'"></i>
                   <span x-text="ttsLoading ? 'Generating...' : 'Speak & Transcribe'"></span>
@@ -1336,17 +1377,28 @@
             <i class="fas fa-chevron-down param-section-chevron" :class="sections.redaction && 'open'"></i>
           </div>
           <div x-show="sections.redaction" class="param-section-body">
-            <div class="field-label" style="margin-bottom:8px;">Redact (select all that apply)</div>
-            <div class="checkbox-grid">
-              <template x-for="opt in redactOptions" :key="opt.value">
-                <div class="checkbox-item">
-                  <input type="checkbox" :id="'redact_' + opt.value"
-                    :checked="params.redact.includes(opt.value)"
-                    @change="toggleRedact(opt.value, $event.target.checked)">
-                  <label :for="'redact_' + opt.value" x-text="opt.label"></label>
-                </div>
-              </template>
+            <div class="field-label" style="margin-bottom:4px;">Redact (select all that apply)</div>
+            <div style="display:flex;gap:4px;margin-bottom:8px;flex-wrap:wrap;">
+              <button class="action-btn btn-sm btn-secondary" style="padding:2px 6px;font-size:10px;"
+                @click="redactOptions.forEach(o => { if (!params.redact.includes(o.value)) toggleRedact(o.value, true) })">Select All</button>
+              <button class="action-btn btn-sm btn-secondary" style="padding:2px 6px;font-size:10px;"
+                @click="params.redact = []">Clear All</button>
             </div>
+            <template x-for="grp in ['Groups','PII','PHI','Other']" :key="grp">
+              <div style="margin-bottom:6px;">
+                <div style="font-size:10px;font-weight:700;color:#9ca3af;text-transform:uppercase;letter-spacing:0.5px;margin-bottom:3px;" x-text="grp"></div>
+                <div class="checkbox-grid">
+                  <template x-for="opt in redactOptions.filter(o => o.group === grp)" :key="opt.value">
+                    <div class="checkbox-item">
+                      <input type="checkbox" :id="'redact_' + opt.value"
+                        :checked="params.redact.includes(opt.value)"
+                        @change="toggleRedact(opt.value, $event.target.checked)">
+                      <label :for="'redact_' + opt.value" x-text="opt.label"></label>
+                    </div>
+                  </template>
+                </div>
+              </div>
+            </template>
           </div>
         </div>
 

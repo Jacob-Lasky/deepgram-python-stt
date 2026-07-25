@@ -2,12 +2,11 @@ import json
 import logging
 import mimetypes
 import threading
-import urllib.parse
 
-import requests
+import httpx
 import websocket  # websocket-client (NOT the websockets package)
 
-from .options import Mode, clean_params
+from .options import Mode, query_string, serialize_params
 
 logger = logging.getLogger(__name__)
 
@@ -21,21 +20,11 @@ class STTClient:
 
     def build_url(self, params: dict, mode: Mode) -> str:
         """Return the full Deepgram URL that would be used for these params."""
-        clean = clean_params(params, mode)
         protocol = "wss" if mode == Mode.STREAMING else "https"
         base = params.get("base_url", self.base_url)
-
-        parts = []
-        for k, v in clean.items():
-            if isinstance(v, list):
-                for item in v:
-                    val = str(item).lower() if isinstance(item, bool) else str(item)
-                    parts.append(f"{k}={urllib.parse.quote(val)}")
-            else:
-                val = str(v).lower() if isinstance(v, bool) else str(v)
-                parts.append(f"{k}={urllib.parse.quote(val)}")
-
-        qs = "&".join(parts)
+        # Shared serializer: DO NOT hand-roll the encoding here again. This was
+        # one of five divergent copies before stt.options.query_string existed.
+        qs = query_string(params, mode)
         return f"{protocol}://{base}/v1/listen?{qs}" if qs else f"{protocol}://{base}/v1/listen"
 
     def open_stream(self, params: dict, on_transcript, on_error=None, on_close=None):
@@ -133,7 +122,10 @@ class STTClient:
         audio_source: file path (str), URL (str starting with http), or bytes
         Returns full Deepgram response dict.
         """
-        clean = clean_params(params, Mode.BATCH)
+        # serialize_params, NOT clean_params: an HTTP layer encodes a Python
+        # bool as "True"/"False" (capitalized), which Deepgram rejects. Every
+        # value must be pre-encoded to the wire form.
+        query = serialize_params(params, Mode.BATCH)
         base = params.get("base_url", self.base_url)
         url = f"https://{base}/v1/listen"
 
@@ -142,17 +134,21 @@ class STTClient:
             "Accept": "application/json",
         }
 
-        if isinstance(audio_source, str) and audio_source.startswith("http"):
-            headers["Content-Type"] = "application/json"
-            response = requests.post(url, headers=headers, json={"url": audio_source}, params=clean, timeout=600)
-        elif isinstance(audio_source, bytes):
-            headers["Content-Type"] = "audio/wav"
-            response = requests.post(url, headers=headers, data=audio_source, params=clean, timeout=600)
-        else:
-            content_type, _ = mimetypes.guess_type(str(audio_source))
-            headers["Content-Type"] = content_type or "audio/wav"
-            with open(audio_source, "rb") as f:
-                response = requests.post(url, headers=headers, data=f, params=clean, timeout=600)
+        # httpx, NOT requests. The v2 migration dropped requests as a
+        # dependency (see .planning/research/STACK.md) but this module kept
+        # importing it, so every STTClient consumer died on ModuleNotFoundError.
+        with httpx.Client(timeout=600) as client:
+            if isinstance(audio_source, str) and audio_source.startswith("http"):
+                headers["Content-Type"] = "application/json"
+                response = client.post(url, headers=headers, json={"url": audio_source}, params=query)
+            elif isinstance(audio_source, bytes):
+                headers["Content-Type"] = "audio/wav"
+                response = client.post(url, headers=headers, content=audio_source, params=query)
+            else:
+                content_type, _ = mimetypes.guess_type(str(audio_source))
+                headers["Content-Type"] = content_type or "audio/wav"
+                with open(audio_source, "rb") as f:
+                    response = client.post(url, headers=headers, content=f.read(), params=query)
 
         response.raise_for_status()
         return response.json()

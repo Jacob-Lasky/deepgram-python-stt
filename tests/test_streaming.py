@@ -87,26 +87,42 @@ class MockAsyncDeepgramClient:
 # Static / structural tests (no server needed)
 # ---------------------------------------------------------------------------
 
+# Repo root, derived from this file's location. DO NOT hardcode an absolute
+# path here: it pins the suite to one machine and fails on every other clone.
+REPO_ROOT = Path(__file__).resolve().parents[1]
+
+
 def test_no_websocket_client_import():
-    """app.py must NOT import websocket-client; must use deepgram SDK instead."""
-    app_text = Path("/coding/deepgram-python-stt/app.py").read_text()
-    assert "import websocket" not in app_text, "websocket-client import found in app.py"
+    """app.py must NOT import websocket-client (sync); websockets (async) is OK for custom endpoints."""
+    app_text = (REPO_ROOT / "app.py").read_text()
+    assert "import websocket\n" not in app_text and "from websocket " not in app_text, \
+        "websocket-client (sync) import found in app.py"
     assert "AsyncDeepgramClient" in app_text, "AsyncDeepgramClient not found in app.py"
 
 
 def test_no_threading_in_app():
     """app.py must not import threading or use time.sleep in streaming path."""
-    app_text = Path("/coding/deepgram-python-stt/app.py").read_text()
+    app_text = (REPO_ROOT / "app.py").read_text()
     assert "import threading" not in app_text, "import threading found in app.py"
     assert "threading.Thread" not in app_text, "threading.Thread found in app.py"
     assert "threading.Event" not in app_text, "threading.Event found in app.py"
     assert "time.sleep" not in app_text, "time.sleep found in app.py"
 
 
-def test_websocket_client_not_in_pyproject():
-    """websocket-client must not be a dependency."""
-    pyproject = Path("/coding/deepgram-python-stt/pyproject.toml").read_text()
-    assert "websocket-client" not in pyproject, "websocket-client found in pyproject.toml"
+def test_websocket_client_not_a_runtime_dep():
+    """websocket-client must not be a RUNTIME dependency of the async app.
+
+    It is legitimately a dev dependency: stt/client.py's sync STTClient still
+    uses it and scripts/test_redaction.py still imports that. The v2 constraint
+    is that the served app never ships the sync gevent-era WebSocket path, so
+    assert on [project] dependencies only, not on the whole file.
+    """
+    import tomllib
+
+    pyproject = tomllib.loads((REPO_ROOT / "pyproject.toml").read_bytes().decode())
+    runtime_deps = pyproject["project"]["dependencies"]
+    offenders = [d for d in runtime_deps if "websocket-client" in d]
+    assert not offenders, f"websocket-client is a runtime dependency: {offenders}"
 
 
 def test_sessions_dict_exists():

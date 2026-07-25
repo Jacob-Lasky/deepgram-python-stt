@@ -4,7 +4,18 @@ function appData() {
   return {
 
     // ---- State ----
-    mode: 'mic',         // 'mic' | 'file' | 'batch'
+    // API access token. The UI shell is public; every call that spends the
+    // Deepgram key carries this. Read from ?token= so a shared link works in
+    // one click, then kept in sessionStorage so it survives navigation without
+    // persisting to disk.
+    apiToken: '',
+    // Access tier, reported by the server on connect. Anonymous visitors get a
+    // working app under limits; a token lifts them. Rendered as a banner so a
+    // visitor who hits a limit sees why instead of a silently broken page.
+    tier: { known: false, privileged: false, maxStreamSeconds: null, maxTtsChars: null },
+    limitNotice: '',       // set when a limit is actually hit
+
+    mode: 'mic',         // 'mic' | 'file' | 'batch' | 'tts'
     rightTab: 'transcript',
     connected: false,
     socket: null,
@@ -26,13 +37,143 @@ function appData() {
 
     // TTS Test
     ttsText: '',
+    ttsProvider: 'deepgram',  // 'deepgram' | 'elevenlabs'
     ttsModel: 'aura-2-asteria-en',
+    ttsLang: 'en',
     ttsMode: 'batch',   // 'batch' | 'streaming' | 'both'
     ttsLoading: false,
     ttsResult: null,
     ttsLastText: '',
     ttsLastTranscript: '',
     ttsLastStreamTranscript: '',
+    // ElevenLabs voices cache (keyed by language code)
+    elevenVoicesCache: {},
+    elevenVoices: [],
+    elevenVoicesLoading: false,
+    // Map Deepgram language codes to ElevenLabs language label prefixes
+    elevenLangMap: {
+      en: 'English',
+      es: 'Spanish',
+      fr: 'French',
+      de: 'German',
+      it: 'Italian',
+      nl: 'Dutch',
+      ja: 'Japanese',
+    },
+
+    // Deepgram Aura-2 voices grouped by language
+    dgVoiceLangs: [
+      { code: 'en', label: 'English' },
+      { code: 'es', label: 'Spanish' },
+      { code: 'de', label: 'German' },
+      { code: 'fr', label: 'French' },
+      { code: 'it', label: 'Italian' },
+      { code: 'nl', label: 'Dutch' },
+      { code: 'ja', label: 'Japanese' },
+    ],
+    dgVoices: [
+      // English — American
+      { id: 'aura-2-asteria-en', name: 'Asteria', gender: 'F', accent: 'American', lang: 'en' },
+      { id: 'aura-2-andromeda-en', name: 'Andromeda', gender: 'F', accent: 'American', lang: 'en' },
+      { id: 'aura-2-apollo-en', name: 'Apollo', gender: 'M', accent: 'American', lang: 'en' },
+      { id: 'aura-2-arcas-en', name: 'Arcas', gender: 'M', accent: 'American', lang: 'en' },
+      { id: 'aura-2-aries-en', name: 'Aries', gender: 'M', accent: 'American', lang: 'en' },
+      { id: 'aura-2-athena-en', name: 'Athena', gender: 'F', accent: 'American', lang: 'en' },
+      { id: 'aura-2-atlas-en', name: 'Atlas', gender: 'M', accent: 'American', lang: 'en' },
+      { id: 'aura-2-aurora-en', name: 'Aurora', gender: 'F', accent: 'American', lang: 'en' },
+      { id: 'aura-2-callista-en', name: 'Callista', gender: 'F', accent: 'American', lang: 'en' },
+      { id: 'aura-2-cora-en', name: 'Cora', gender: 'F', accent: 'American', lang: 'en' },
+      { id: 'aura-2-cordelia-en', name: 'Cordelia', gender: 'F', accent: 'American', lang: 'en' },
+      { id: 'aura-2-delia-en', name: 'Delia', gender: 'F', accent: 'American', lang: 'en' },
+      { id: 'aura-2-electra-en', name: 'Electra', gender: 'F', accent: 'American', lang: 'en' },
+      { id: 'aura-2-harmonia-en', name: 'Harmonia', gender: 'F', accent: 'American', lang: 'en' },
+      { id: 'aura-2-helena-en', name: 'Helena', gender: 'F', accent: 'American', lang: 'en' },
+      { id: 'aura-2-hera-en', name: 'Hera', gender: 'F', accent: 'American', lang: 'en' },
+      { id: 'aura-2-hermes-en', name: 'Hermes', gender: 'M', accent: 'American', lang: 'en' },
+      { id: 'aura-2-iris-en', name: 'Iris', gender: 'F', accent: 'American', lang: 'en' },
+      { id: 'aura-2-juno-en', name: 'Juno', gender: 'F', accent: 'American', lang: 'en' },
+      { id: 'aura-2-jupiter-en', name: 'Jupiter', gender: 'M', accent: 'American', lang: 'en' },
+      { id: 'aura-2-luna-en', name: 'Luna', gender: 'F', accent: 'American', lang: 'en' },
+      { id: 'aura-2-mars-en', name: 'Mars', gender: 'M', accent: 'American', lang: 'en' },
+      { id: 'aura-2-minerva-en', name: 'Minerva', gender: 'F', accent: 'American', lang: 'en' },
+      { id: 'aura-2-neptune-en', name: 'Neptune', gender: 'M', accent: 'American', lang: 'en' },
+      { id: 'aura-2-odysseus-en', name: 'Odysseus', gender: 'M', accent: 'American', lang: 'en' },
+      { id: 'aura-2-ophelia-en', name: 'Ophelia', gender: 'F', accent: 'American', lang: 'en' },
+      { id: 'aura-2-orion-en', name: 'Orion', gender: 'M', accent: 'American', lang: 'en' },
+      { id: 'aura-2-orpheus-en', name: 'Orpheus', gender: 'M', accent: 'American', lang: 'en' },
+      { id: 'aura-2-phoebe-en', name: 'Phoebe', gender: 'F', accent: 'American', lang: 'en' },
+      { id: 'aura-2-pluto-en', name: 'Pluto', gender: 'M', accent: 'American', lang: 'en' },
+      { id: 'aura-2-saturn-en', name: 'Saturn', gender: 'M', accent: 'American', lang: 'en' },
+      { id: 'aura-2-selene-en', name: 'Selene', gender: 'F', accent: 'American', lang: 'en' },
+      { id: 'aura-2-thalia-en', name: 'Thalia', gender: 'F', accent: 'American', lang: 'en' },
+      { id: 'aura-2-zeus-en', name: 'Zeus', gender: 'M', accent: 'American', lang: 'en' },
+      // English — Southern US
+      { id: 'aura-2-janus-en', name: 'Janus', gender: 'F', accent: 'Southern US', lang: 'en' },
+      // English — Filipino
+      { id: 'aura-2-amalthea-en', name: 'Amalthea', gender: 'F', accent: 'Filipino', lang: 'en' },
+      // English — British
+      { id: 'aura-2-draco-en', name: 'Draco', gender: 'M', accent: 'British', lang: 'en' },
+      { id: 'aura-2-pandora-en', name: 'Pandora', gender: 'F', accent: 'British', lang: 'en' },
+      // English — Australian
+      { id: 'aura-2-hyperion-en', name: 'Hyperion', gender: 'M', accent: 'Australian', lang: 'en' },
+      { id: 'aura-2-theia-en', name: 'Theia', gender: 'F', accent: 'Australian', lang: 'en' },
+      // Spanish
+      { id: 'aura-2-estrella-es', name: 'Estrella', gender: 'F', accent: 'Mexican', lang: 'es' },
+      { id: 'aura-2-sirio-es', name: 'Sirio', gender: 'M', accent: 'Mexican', lang: 'es' },
+      { id: 'aura-2-javier-es', name: 'Javier', gender: 'M', accent: 'Mexican', lang: 'es' },
+      { id: 'aura-2-luciano-es', name: 'Luciano', gender: 'M', accent: 'Mexican', lang: 'es' },
+      { id: 'aura-2-olivia-es', name: 'Olivia', gender: 'F', accent: 'Mexican', lang: 'es' },
+      { id: 'aura-2-valerio-es', name: 'Valerio', gender: 'M', accent: 'Mexican', lang: 'es' },
+      { id: 'aura-2-nestor-es', name: 'Nestor', gender: 'M', accent: 'Peninsular', lang: 'es' },
+      { id: 'aura-2-carina-es', name: 'Carina', gender: 'F', accent: 'Peninsular', lang: 'es' },
+      { id: 'aura-2-alvaro-es', name: 'Alvaro', gender: 'M', accent: 'Peninsular', lang: 'es' },
+      { id: 'aura-2-diana-es', name: 'Diana', gender: 'F', accent: 'Peninsular', lang: 'es' },
+      { id: 'aura-2-agustina-es', name: 'Agustina', gender: 'F', accent: 'Peninsular', lang: 'es' },
+      { id: 'aura-2-silvia-es', name: 'Silvia', gender: 'F', accent: 'Peninsular', lang: 'es' },
+      { id: 'aura-2-celeste-es', name: 'Celeste', gender: 'F', accent: 'Colombian', lang: 'es' },
+      { id: 'aura-2-gloria-es', name: 'Gloria', gender: 'F', accent: 'Colombian', lang: 'es' },
+      { id: 'aura-2-antonia-es', name: 'Antonia', gender: 'F', accent: 'Argentine', lang: 'es' },
+      { id: 'aura-2-aquila-es', name: 'Aquila', gender: 'M', accent: 'Latin American', lang: 'es' },
+      { id: 'aura-2-selena-es', name: 'Selena', gender: 'F', accent: 'Latin American', lang: 'es' },
+      // German
+      { id: 'aura-2-julius-de', name: 'Julius', gender: 'M', accent: 'German', lang: 'de' },
+      { id: 'aura-2-viktoria-de', name: 'Viktoria', gender: 'F', accent: 'German', lang: 'de' },
+      { id: 'aura-2-elara-de', name: 'Elara', gender: 'F', accent: 'German', lang: 'de' },
+      { id: 'aura-2-aurelia-de', name: 'Aurelia', gender: 'F', accent: 'German', lang: 'de' },
+      { id: 'aura-2-lara-de', name: 'Lara', gender: 'F', accent: 'German', lang: 'de' },
+      { id: 'aura-2-fabian-de', name: 'Fabian', gender: 'M', accent: 'German', lang: 'de' },
+      { id: 'aura-2-kara-de', name: 'Kara', gender: 'F', accent: 'German', lang: 'de' },
+      // French
+      { id: 'aura-2-agathe-fr', name: 'Agathe', gender: 'F', accent: 'French', lang: 'fr' },
+      { id: 'aura-2-hector-fr', name: 'Hector', gender: 'M', accent: 'French', lang: 'fr' },
+      // Italian
+      { id: 'aura-2-livia-it', name: 'Livia', gender: 'F', accent: 'Italian', lang: 'it' },
+      { id: 'aura-2-dionisio-it', name: 'Dionisio', gender: 'M', accent: 'Italian', lang: 'it' },
+      { id: 'aura-2-melia-it', name: 'Melia', gender: 'F', accent: 'Italian', lang: 'it' },
+      { id: 'aura-2-elio-it', name: 'Elio', gender: 'M', accent: 'Italian', lang: 'it' },
+      { id: 'aura-2-flavio-it', name: 'Flavio', gender: 'M', accent: 'Italian', lang: 'it' },
+      { id: 'aura-2-maia-it', name: 'Maia', gender: 'F', accent: 'Italian', lang: 'it' },
+      { id: 'aura-2-cinzia-it', name: 'Cinzia', gender: 'F', accent: 'Italian', lang: 'it' },
+      { id: 'aura-2-cesare-it', name: 'Cesare', gender: 'M', accent: 'Italian', lang: 'it' },
+      { id: 'aura-2-perseo-it', name: 'Perseo', gender: 'M', accent: 'Italian', lang: 'it' },
+      { id: 'aura-2-demetra-it', name: 'Demetra', gender: 'F', accent: 'Italian', lang: 'it' },
+      // Dutch
+      { id: 'aura-2-rhea-nl', name: 'Rhea', gender: 'F', accent: 'Dutch', lang: 'nl' },
+      { id: 'aura-2-sander-nl', name: 'Sander', gender: 'M', accent: 'Dutch', lang: 'nl' },
+      { id: 'aura-2-beatrix-nl', name: 'Beatrix', gender: 'F', accent: 'Dutch', lang: 'nl' },
+      { id: 'aura-2-daphne-nl', name: 'Daphne', gender: 'F', accent: 'Dutch', lang: 'nl' },
+      { id: 'aura-2-cornelia-nl', name: 'Cornelia', gender: 'F', accent: 'Dutch', lang: 'nl' },
+      { id: 'aura-2-hestia-nl', name: 'Hestia', gender: 'F', accent: 'Dutch', lang: 'nl' },
+      { id: 'aura-2-lars-nl', name: 'Lars', gender: 'M', accent: 'Dutch', lang: 'nl' },
+      { id: 'aura-2-roman-nl', name: 'Roman', gender: 'M', accent: 'Dutch', lang: 'nl' },
+      { id: 'aura-2-leda-nl', name: 'Leda', gender: 'F', accent: 'Dutch', lang: 'nl' },
+      // Japanese
+      { id: 'aura-2-fujin-ja', name: 'Fujin', gender: 'M', accent: 'Japanese', lang: 'ja' },
+      { id: 'aura-2-izanami-ja', name: 'Izanami', gender: 'F', accent: 'Japanese', lang: 'ja' },
+      { id: 'aura-2-uzume-ja', name: 'Uzume', gender: 'F', accent: 'Japanese', lang: 'ja' },
+      { id: 'aura-2-ebisu-ja', name: 'Ebisu', gender: 'M', accent: 'Japanese', lang: 'ja' },
+      { id: 'aura-2-ama-ja', name: 'Ama', gender: 'F', accent: 'Japanese', lang: 'ja' },
+    ],
 
     // Transcript
     finalTranscript: '',
@@ -74,20 +215,76 @@ function appData() {
 
     // Redact options
     redactOptions: [
-      { value: 'pci', label: 'PCI' },
-      { value: 'ssn', label: 'SSN' },
-      { value: 'credit_card', label: 'Credit Card' },
-      { value: 'account_number', label: 'Account #' },
-      { value: 'routing_number', label: 'Routing #' },
-      { value: 'passport_number', label: 'Passport' },
-      { value: 'driver_license', label: 'Driver License' },
-      { value: 'numerical_pii', label: 'Numerical PII' },
-      { value: 'numbers', label: 'Numbers' },
-      { value: 'aggressive_numbers', label: 'Aggressive Nums' },
-      { value: 'phi', label: 'PHI' },
-      { value: 'name', label: 'Name' },
-      { value: 'dob', label: 'Date of Birth' },
-      { value: 'username', label: 'Username' },
+      // Groups
+      { value: 'pii', label: 'PII (group)', group: 'Groups' },
+      { value: 'phi', label: 'PHI (group)', group: 'Groups' },
+      { value: 'pci', label: 'PCI (group)', group: 'Groups' },
+      { value: 'numbers', label: 'Numbers (3+ digits)', group: 'Groups' },
+      { value: 'aggressive_numbers', label: 'Aggressive Numbers', group: 'Groups' },
+      { value: 'pin', label: 'PIN', group: 'Groups' },
+      // PII — Identity
+      { value: 'name', label: 'Name', group: 'PII' },
+      { value: 'name_given', label: 'Given Name', group: 'PII' },
+      { value: 'name_family', label: 'Family Name', group: 'PII' },
+      { value: 'name_medical_professional', label: 'Medical Professional Name', group: 'PII' },
+      { value: 'dob', label: 'Date of Birth', group: 'PII' },
+      { value: 'age', label: 'Age', group: 'PII' },
+      { value: 'gender_sexuality', label: 'Gender/Sexuality', group: 'PII' },
+      { value: 'origin', label: 'Origin', group: 'PII' },
+      { value: 'occupation', label: 'Occupation', group: 'PII' },
+      { value: 'physical_attribute', label: 'Physical Attribute', group: 'PII' },
+      { value: 'username', label: 'Username', group: 'PII' },
+      { value: 'password', label: 'Password', group: 'PII' },
+      // PII — Financial
+      { value: 'credit_card', label: 'Credit Card', group: 'PII' },
+      { value: 'credit_card_expiration', label: 'CC Expiration', group: 'PII' },
+      { value: 'cvv', label: 'CVV', group: 'PII' },
+      { value: 'account_number', label: 'Account Number', group: 'PII' },
+      { value: 'bank_account', label: 'Bank Account', group: 'PII' },
+      { value: 'routing_number', label: 'Routing Number', group: 'PII' },
+      { value: 'money', label: 'Money', group: 'PII' },
+      // PII — Government IDs
+      { value: 'ssn', label: 'SSN', group: 'PII' },
+      { value: 'driver_license', label: 'Driver License', group: 'PII' },
+      { value: 'passport_number', label: 'Passport Number', group: 'PII' },
+      { value: 'healthcare_number', label: 'Healthcare Number', group: 'PII' },
+      { value: 'vehicle_id', label: 'Vehicle ID', group: 'PII' },
+      // PII — Contact & Location
+      { value: 'email_address', label: 'Email Address', group: 'PII' },
+      { value: 'phone_number', label: 'Phone Number', group: 'PII' },
+      { value: 'ip_address', label: 'IP Address', group: 'PII' },
+      { value: 'url', label: 'URL', group: 'PII' },
+      { value: 'location', label: 'Location', group: 'PII' },
+      { value: 'location_address', label: 'Address', group: 'PII' },
+      { value: 'location_city', label: 'City', group: 'PII' },
+      { value: 'location_state', label: 'State', group: 'PII' },
+      { value: 'location_country', label: 'Country', group: 'PII' },
+      { value: 'location_zip', label: 'ZIP Code', group: 'PII' },
+      { value: 'location_coordinate', label: 'Coordinate', group: 'PII' },
+      // PII — Numbers & Dates
+      { value: 'numerical_pii', label: 'Numerical PII', group: 'PII' },
+      { value: 'cardinal', label: 'Cardinal Number', group: 'PII' },
+      { value: 'ordinal', label: 'Ordinal Number', group: 'PII' },
+      { value: 'percent', label: 'Percent', group: 'PII' },
+      { value: 'date', label: 'Date', group: 'PII' },
+      { value: 'date_interval', label: 'Date Interval', group: 'PII' },
+      { value: 'time', label: 'Time', group: 'PII' },
+      // PII — Other
+      { value: 'event', label: 'Event', group: 'PII' },
+      { value: 'filename', label: 'Filename', group: 'PII' },
+      { value: 'organization', label: 'Organization', group: 'Other' },
+      { value: 'language', label: 'Language', group: 'Other' },
+      { value: 'marital_status', label: 'Marital Status', group: 'Other' },
+      { value: 'political_affiliation', label: 'Political Affiliation', group: 'Other' },
+      { value: 'religion', label: 'Religion', group: 'Other' },
+      { value: 'zodiac_sign', label: 'Zodiac Sign', group: 'Other' },
+      // PHI
+      { value: 'condition', label: 'Condition', group: 'PHI' },
+      { value: 'drug', label: 'Drug', group: 'PHI' },
+      { value: 'injury', label: 'Injury', group: 'PHI' },
+      { value: 'blood_type', label: 'Blood Type', group: 'PHI' },
+      { value: 'medical_process', label: 'Medical Process', group: 'PHI' },
+      { value: 'statistics', label: 'Statistics', group: 'PHI' },
     ],
 
     // ---- Params ----
@@ -135,6 +332,9 @@ function appData() {
 
     // ---- Init ----
     init() {
+      // MUST run before setupSocket(): the token goes in the SocketIO
+      // handshake, and a socket opened without it is refused at connect.
+      this._loadToken();
       this.setupSocket();
 
       // Watch params and update URL (debounced)
@@ -186,8 +386,79 @@ function appData() {
     },
 
     // ---- SocketIO ----
+    _loadToken() {
+      const fromUrl = new URLSearchParams(window.location.search).get('token');
+      if (fromUrl) {
+        this.apiToken = fromUrl.trim();
+        sessionStorage.setItem('sttApiToken', this.apiToken);
+        // Drop the token out of the visible URL so it does not end up in a
+        // screenshot or a copied link by accident. sessionStorage still has it.
+        const url = new URL(window.location.href);
+        url.searchParams.delete('token');
+        window.history.replaceState({}, '', url);
+      } else {
+        this.apiToken = (sessionStorage.getItem('sttApiToken') || '').trim();
+      }
+    },
+
+    _authHeaders(extra) {
+      const headers = Object.assign({}, extra || {});
+      if (this.apiToken) headers['X-App-Token'] = this.apiToken;
+      return headers;
+    },
+
+    // Append the token to a URL for contexts that cannot send headers, i.e. an
+    // <audio src>. Header-based auth is preferred everywhere else.
+    _authUrl(path) {
+      if (!this.apiToken) return path;
+      const sep = path.includes('?') ? '&' : '?';
+      return `${path}${sep}token=${encodeURIComponent(this.apiToken)}`;
+    },
+
+    async _authedFetch(path, options) {
+      const opts = Object.assign({}, options || {});
+      opts.headers = this._authHeaders(opts.headers);
+      const res = await fetch(path, opts);
+      if (res.status === 401 || res.status === 429) {
+        let detail = '';
+        try { detail = (await res.clone().json()).detail || ''; } catch (e) { /* non-JSON body */ }
+        this.limitNotice = detail || 'This instance requires an access token.';
+        this.showToast(this.limitNotice, 'error');
+      }
+      return res;
+    },
+
     setupSocket() {
-      this.socket = io(window.location.origin, { transports: ['websocket', 'polling'] });
+      this.socket = io(window.location.origin, {
+        transports: ['websocket', 'polling'],
+        auth: { token: this.apiToken },
+      });
+
+      this.socket.on('connect_error', (err) => {
+        this.connected = false;
+        const msg = String((err && err.message) || '');
+        // The server refuses a connect for a reason worth showing verbatim:
+        // token required, or the demo's concurrent-stream cap.
+        if (msg) {
+          this.limitNotice = msg;
+          this.showToast(msg, 'error');
+        }
+      });
+
+      this.socket.on('access_tier', (data) => {
+        this.tier = {
+          known: true,
+          privileged: !!data.privileged,
+          maxStreamSeconds: data.max_stream_seconds,
+          maxTtsChars: data.max_tts_chars,
+        };
+      });
+
+      this.socket.on('stream_limit_reached', (data) => {
+        this.limitNotice = data.reason;
+        this.showToast(data.reason, 'error');
+        this.recording = false;
+      });
 
       this.socket.on('connect', () => {
         this.connected = true;
@@ -341,7 +612,7 @@ function appData() {
       const formData = new FormData();
       formData.append('file', file);
       try {
-        const res = await fetch('/upload', { method: 'POST', body: formData });
+        const res = await this._authedFetch('/upload', { method: 'POST', body: formData });
         const data = await res.json();
         if (data.error) throw new Error(data.error);
         this.uploadedFile = { name: file.name, serverName: data.filename, size: data.size };
@@ -359,7 +630,7 @@ function appData() {
 
       // Play file through speakers — server streams to Deepgram at the same
       // real-time rate, so transcripts arrive in sync with playback naturally.
-      this._fileAudio = new Audio(`/files/${encodeURIComponent(this.uploadedFile.serverName)}`);
+      this._fileAudio = new Audio(this._authUrl(`/files/${encodeURIComponent(this.uploadedFile.serverName)}`));
       this._fileAudio.play().catch(e => console.warn('[DG] audio playback failed:', e));
 
       this.socket.emit('start_file_streaming', {
@@ -408,7 +679,7 @@ function appData() {
       }
 
       try {
-        const res = await fetch('/transcribe', {
+        const res = await this._authedFetch('/transcribe', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify(body),
@@ -432,6 +703,77 @@ function appData() {
       }
     },
 
+    filteredDgVoices() {
+      return this.dgVoices.filter(v => v.lang === this.ttsLang);
+    },
+
+    filteredElevenVoices() {
+      // Voices are already fetched per-language from the API.
+      // Client-side filter catches user's own voices that may not match.
+      const label = this.elevenLangMap[this.ttsLang] || '';
+      if (!label) return this.elevenVoices;
+      // Keep shared voices (already language-matched) + user voices matching language
+      return this.elevenVoices.filter(v =>
+        v.source === 'shared' ||
+        !v.language ||
+        v.language.toLowerCase().startsWith(label.toLowerCase())
+      );
+    },
+
+    switchTtsLang(lang) {
+      this.ttsLang = lang;
+      // Keep STT language in sync so we don't transcribe with the wrong language
+      this.params.language = lang;
+      if (this.ttsProvider === 'elevenlabs') {
+        this.loadElevenVoices(lang).then(() => {
+          const voices = this.filteredElevenVoices();
+          if (voices.length && !voices.find(v => v.voice_id === this.ttsModel)) {
+            this.ttsModel = voices[0].voice_id;
+          }
+        });
+      } else {
+        const voices = this.dgVoices.filter(v => v.lang === lang);
+        if (voices.length && !voices.find(v => v.id === this.ttsModel)) {
+          this.ttsModel = voices[0].id;
+        }
+      }
+    },
+
+    async loadElevenVoices(lang) {
+      lang = lang || this.ttsLang;
+      if (this.elevenVoicesCache[lang]) {
+        this.elevenVoices = this.elevenVoicesCache[lang];
+        return;
+      }
+      this.elevenVoicesLoading = true;
+      try {
+        const langCode = this.elevenLangMap[lang] ? lang : '';
+        const url = `/api/tts-voices?provider=elevenlabs${langCode ? '&language=' + langCode : ''}`;
+        const res = await this._authedFetch(url);
+        const data = await res.json();
+        if (data.error) throw new Error(data.error);
+        this.elevenVoices = data.voices || [];
+        this.elevenVoicesCache[lang] = this.elevenVoices;
+      } catch (err) {
+        this.showToast('Failed to load ElevenLabs voices: ' + err.message, 'error');
+      } finally {
+        this.elevenVoicesLoading = false;
+      }
+    },
+
+    switchTtsProvider(provider) {
+      this.ttsProvider = provider;
+      if (provider === 'elevenlabs') {
+        this.loadElevenVoices(this.ttsLang).then(() => {
+          const filtered = this.filteredElevenVoices();
+          this.ttsModel = filtered.length ? filtered[0].voice_id : '';
+        });
+      } else {
+        const voices = this.dgVoices.filter(v => v.lang === this.ttsLang);
+        this.ttsModel = voices.length ? voices[0].id : 'aura-2-asteria-en';
+      }
+    },
+
     async runTts() {
       if (!this.ttsText.trim()) return;
       this.ttsLoading = true;
@@ -439,12 +781,13 @@ function appData() {
       this.rightTab = 'tts';
 
       try {
-        const res = await fetch('/api/tts-transcribe', {
+        const res = await this._authedFetch('/api/tts-transcribe', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
             text: this.ttsText,
             tts_model: this.ttsModel,
+            tts_provider: this.ttsProvider,
             mode: this.ttsMode,
             stt_params: this.getCleanParams('batch'),
           }),
@@ -552,6 +895,11 @@ function appData() {
       const base = this.params.base_url || 'api.deepgram.com';
 
       if (this.mode === 'tts') {
+        if (this.ttsProvider === 'elevenlabs') {
+          const voiceId = this.ttsModel || '(select voice)';
+          this.urlDisplay = `api.elevenlabs.io/v1/text-to-speech/${voiceId}`;
+          return `https://${this.urlDisplay}`;
+        }
         const ttsModel = this.ttsModel || 'aura-2-asteria-en';
         this.urlDisplay = `${base}/v1/speak?model=${ttsModel}&encoding=mp3`;
         return `https://${this.urlDisplay}`;
