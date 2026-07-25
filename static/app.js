@@ -4,6 +4,13 @@ function appData() {
   return {
 
     // ---- State ----
+    // API access token. The UI shell is public; every call that spends the
+    // Deepgram key carries this. Read from ?token= so a shared link works in
+    // one click, then kept in sessionStorage so it survives navigation without
+    // persisting to disk.
+    apiToken: '',
+    authRequired: false,   // set when any call comes back 401
+
     mode: 'mic',         // 'mic' | 'file' | 'batch' | 'tts'
     rightTab: 'transcript',
     connected: false,
@@ -321,6 +328,9 @@ function appData() {
 
     // ---- Init ----
     init() {
+      // MUST run before setupSocket(): the token goes in the SocketIO
+      // handshake, and a socket opened without it is refused at connect.
+      this._loadToken();
       this.setupSocket();
 
       // Watch params and update URL (debounced)
@@ -372,8 +382,59 @@ function appData() {
     },
 
     // ---- SocketIO ----
+    _loadToken() {
+      const fromUrl = new URLSearchParams(window.location.search).get('token');
+      if (fromUrl) {
+        this.apiToken = fromUrl.trim();
+        sessionStorage.setItem('sttApiToken', this.apiToken);
+        // Drop the token out of the visible URL so it does not end up in a
+        // screenshot or a copied link by accident. sessionStorage still has it.
+        const url = new URL(window.location.href);
+        url.searchParams.delete('token');
+        window.history.replaceState({}, '', url);
+      } else {
+        this.apiToken = (sessionStorage.getItem('sttApiToken') || '').trim();
+      }
+    },
+
+    _authHeaders(extra) {
+      const headers = Object.assign({}, extra || {});
+      if (this.apiToken) headers['X-App-Token'] = this.apiToken;
+      return headers;
+    },
+
+    // Append the token to a URL for contexts that cannot send headers, i.e. an
+    // <audio src>. Header-based auth is preferred everywhere else.
+    _authUrl(path) {
+      if (!this.apiToken) return path;
+      const sep = path.includes('?') ? '&' : '?';
+      return `${path}${sep}token=${encodeURIComponent(this.apiToken)}`;
+    },
+
+    async _authedFetch(path, options) {
+      const opts = Object.assign({}, options || {});
+      opts.headers = this._authHeaders(opts.headers);
+      const res = await fetch(path, opts);
+      if (res.status === 401) {
+        this.authRequired = true;
+        this.showToast('This instance requires an access token. Open the link with ?token=YOUR_TOKEN', 'error');
+      }
+      return res;
+    },
+
     setupSocket() {
-      this.socket = io(window.location.origin, { transports: ['websocket', 'polling'] });
+      this.socket = io(window.location.origin, {
+        transports: ['websocket', 'polling'],
+        auth: { token: this.apiToken },
+      });
+
+      this.socket.on('connect_error', (err) => {
+        this.connected = false;
+        if (String(err && err.message).includes('invalid access token')) {
+          this.authRequired = true;
+          this.showToast('Streaming requires an access token. Open the link with ?token=YOUR_TOKEN', 'error');
+        }
+      });
 
       this.socket.on('connect', () => {
         this.connected = true;
@@ -527,7 +588,7 @@ function appData() {
       const formData = new FormData();
       formData.append('file', file);
       try {
-        const res = await fetch('/upload', { method: 'POST', body: formData });
+        const res = await this._authedFetch('/upload', { method: 'POST', body: formData });
         const data = await res.json();
         if (data.error) throw new Error(data.error);
         this.uploadedFile = { name: file.name, serverName: data.filename, size: data.size };
@@ -545,7 +606,7 @@ function appData() {
 
       // Play file through speakers — server streams to Deepgram at the same
       // real-time rate, so transcripts arrive in sync with playback naturally.
-      this._fileAudio = new Audio(`/files/${encodeURIComponent(this.uploadedFile.serverName)}`);
+      this._fileAudio = new Audio(this._authUrl(`/files/${encodeURIComponent(this.uploadedFile.serverName)}`));
       this._fileAudio.play().catch(e => console.warn('[DG] audio playback failed:', e));
 
       this.socket.emit('start_file_streaming', {
@@ -594,7 +655,7 @@ function appData() {
       }
 
       try {
-        const res = await fetch('/transcribe', {
+        const res = await this._authedFetch('/transcribe', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify(body),
@@ -664,7 +725,7 @@ function appData() {
       try {
         const langCode = this.elevenLangMap[lang] ? lang : '';
         const url = `/api/tts-voices?provider=elevenlabs${langCode ? '&language=' + langCode : ''}`;
-        const res = await fetch(url);
+        const res = await this._authedFetch(url);
         const data = await res.json();
         if (data.error) throw new Error(data.error);
         this.elevenVoices = data.voices || [];
@@ -696,7 +757,7 @@ function appData() {
       this.rightTab = 'tts';
 
       try {
-        const res = await fetch('/api/tts-transcribe', {
+        const res = await this._authedFetch('/api/tts-transcribe', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({

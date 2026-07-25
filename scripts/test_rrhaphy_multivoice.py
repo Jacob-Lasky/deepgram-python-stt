@@ -4,6 +4,7 @@ TTS→STT round-trip test for rare medical "-rrhaphy" terms.
 10 Deepgram TTS voices × 8 terms × 3 trials × 2 conditions (no keyterms / with keyterms).
 Uses /api/tts-transcribe on deepgram-python-stt.fly.dev.
 """
+import os
 import httpx
 import csv
 import sys
@@ -16,6 +17,11 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 SCRIPT_DIR = Path(__file__).resolve().parent
 
 BASE_URL = "https://deepgram-python-stt.fly.dev"
+# The API is token-gated. Export APP_ACCESS_TOKEN (same value as the fly secret)
+# so the harness can reach /api/tts-transcribe.
+APP_TOKEN = os.getenv("APP_ACCESS_TOKEN", "")
+AUTH_HEADERS = {"X-App-Token": APP_TOKEN} if APP_TOKEN else {}
+
 STT_MODEL = "nova-3-medical"
 
 VOICES = [
@@ -110,7 +116,7 @@ def run_single(client: httpx.Client, voice: str, term: str, trial: int, template
         "mode": "batch",
     }
     try:
-        resp = client.post(f"{BASE_URL}/api/tts-transcribe", json=payload)
+        resp = client.post(f"{BASE_URL}/api/tts-transcribe", json=payload, headers=AUTH_HEADERS)
         resp.raise_for_status()
         transcript = extract_transcript(resp.json())
     except Exception as e:

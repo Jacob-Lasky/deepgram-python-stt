@@ -3,6 +3,7 @@ import json as json_mod
 import logging
 import os
 import re
+import secrets
 import tempfile
 import urllib.parse
 from pathlib import Path
@@ -16,7 +17,7 @@ from deepgram import AsyncDeepgramClient
 from deepgram.core.events import EventType
 from deepgram.listen.v1.types import ListenV1Results, ListenV1Metadata
 from dotenv import load_dotenv
-from fastapi import FastAPI, Request, UploadFile, File
+from fastapi import Depends, FastAPI, HTTPException, Request, UploadFile, File
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
@@ -53,6 +54,62 @@ _BARE_HOST_RE = re.compile(r"^[a-z0-9]([a-z0-9.-]*[a-z0-9])?(:\d{1,5})?$")
 # a spend cap, not just a validation nicety.
 MAX_TTS_CHARS = int(os.getenv("MAX_TTS_CHARS", 2000))
 MAX_UPLOAD_BYTES = int(os.getenv("MAX_UPLOAD_BYTES", 100 * 1024 * 1024))
+
+
+# --- Security: API access token ---
+# The UI shell (GET / and /static/*) is deliberately OPEN so a shared link is
+# browsable with no wall. Everything that SPENDS THE DEEPGRAM KEY is gated:
+# the HTTP API and the SocketIO stream.
+#
+# DO NOT "exempt the UI" by leaving the SocketIO connect handler ungated. The
+# browser is attacker-controlled, so there is no way to authenticate "our own
+# page" as distinct from a user: anyone who loads it can read its network calls
+# and replay them. Mic streaming runs over SocketIO, so an ungated socket is a
+# free key-spend path straight through the open UI.
+#
+# APP_ACCESS_TOKEN unset means no gate, which is what local dev and the test
+# suite want. REQUIRE_AUTH=true asserts the gate is on, so a deployment cannot
+# silently come up open because a secret was forgotten.
+APP_ACCESS_TOKEN = os.getenv("APP_ACCESS_TOKEN", "").strip()
+REQUIRE_AUTH = os.getenv("REQUIRE_AUTH", "").strip().lower() in ("1", "true", "yes", "on")
+
+if REQUIRE_AUTH and not APP_ACCESS_TOKEN:
+    raise RuntimeError(
+        "REQUIRE_AUTH is set but APP_ACCESS_TOKEN is empty. Set the token "
+        "(fly secrets set APP_ACCESS_TOKEN=...) or unset REQUIRE_AUTH for open access."
+    )
+if not APP_ACCESS_TOKEN:
+    logger.warning(
+        "APP_ACCESS_TOKEN is not set: the API is OPEN and anyone who can reach "
+        "this app can spend the Deepgram key."
+    )
+
+
+def _extract_token(request: Request) -> str:
+    """Pull the caller's token from a header or the query string.
+
+    Query-string support is not laziness: an <audio src="/files/..."> element
+    cannot send headers, so file playback has no other way to authenticate.
+    """
+    header = request.headers.get("x-app-token", "")
+    if header:
+        return header.strip()
+    bearer = request.headers.get("authorization", "")
+    if bearer.lower().startswith("bearer "):
+        return bearer[7:].strip()
+    return (request.query_params.get("token") or "").strip()
+
+
+def _require_api_token(request: Request) -> None:
+    """FastAPI dependency gating every endpoint that spends the Deepgram key."""
+    if not APP_ACCESS_TOKEN:
+        return
+    # compare_digest, not ==, so a wrong token cannot be recovered by timing.
+    if not secrets.compare_digest(_extract_token(request), APP_ACCESS_TOKEN):
+        raise HTTPException(
+            status_code=401,
+            detail="missing or invalid access token (send X-App-Token or ?token=)",
+        )
 
 
 class HostNotAllowed(ValueError):
@@ -128,7 +185,7 @@ async def index():
     return FileResponse("templates/index.html")
 
 
-@fastapi_app.post("/upload")
+@fastapi_app.post("/upload", dependencies=[Depends(_require_api_token)])
 async def upload(file: UploadFile = File(...)):
     try:
         path = _safe_temp_path(file.filename)
@@ -144,7 +201,7 @@ async def upload(file: UploadFile = File(...)):
     return JSONResponse({"filename": path.name, "size": path.stat().st_size})
 
 
-@fastapi_app.get("/files/{filename}")
+@fastapi_app.get("/files/{filename}", dependencies=[Depends(_require_api_token)])
 async def serve_file(filename: str):
     try:
         path = _safe_temp_path(filename)
@@ -346,7 +403,7 @@ async def _stt_streaming_raw(text: str, tts_model: str, stt_params: dict, api_ke
     }
 
 
-@fastapi_app.get("/api/tts-voices")
+@fastapi_app.get("/api/tts-voices", dependencies=[Depends(_require_api_token)])
 async def tts_voices(provider: str = "elevenlabs", language: str = ""):
     """Return available voices for a TTS provider, optionally filtered by language.
 
@@ -417,7 +474,7 @@ async def _generate_tts_audio(text: str, tts_model: str, provider: str) -> bytes
         return await _tts_generate(text, tts_model, api_key)
 
 
-@fastapi_app.post("/api/tts-transcribe")
+@fastapi_app.post("/api/tts-transcribe", dependencies=[Depends(_require_api_token)])
 async def tts_transcribe(request: Request):
     body = await request.json()
     text = body.get("text", "").strip()
@@ -480,7 +537,7 @@ async def tts_transcribe(request: Request):
         return JSONResponse({"error": _clean_error(e)}, status_code=500)
 
 
-@fastapi_app.post("/transcribe")
+@fastapi_app.post("/transcribe", dependencies=[Depends(_require_api_token)])
 async def transcribe(request: Request):
     body = await request.json()
     params = body.get("params", {})
@@ -729,6 +786,24 @@ async def file_streaming_task(
 
 @sio.event
 async def connect(sid, environ, auth=None):
+    """Gate the stream at connect time.
+
+    Mic and file streaming both spend the Deepgram key over this socket, so it
+    is part of the API surface even though the page that opens it is public.
+    Refusing here is cheaper than checking on every audio frame.
+    """
+    if APP_ACCESS_TOKEN:
+        supplied = ""
+        if isinstance(auth, dict):
+            supplied = str(auth.get("token") or "").strip()
+        if not supplied:
+            # Fall back to the handshake query string for non-browser clients.
+            supplied = urllib.parse.parse_qs(
+                environ.get("QUERY_STRING", "")
+            ).get("token", [""])[0].strip()
+        if not secrets.compare_digest(supplied, APP_ACCESS_TOKEN):
+            logger.warning("Refused SocketIO connect (bad token): %s", sid)
+            raise socketio.exceptions.ConnectionRefusedError("invalid access token")
     logger.info("Client connected: %s", sid)
 
 

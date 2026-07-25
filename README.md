@@ -120,6 +120,8 @@ whoever hits it, so these bound what a caller can do:
 
 | Variable | Default | Purpose |
 |----------|---------|---------|
+| `APP_ACCESS_TOKEN` | *(unset)* | Shared secret gating every endpoint that spends the Deepgram key. Unset means the API is open, which is what local dev wants. |
+| `REQUIRE_AUTH` | *(unset)* | When true, the app refuses to boot without `APP_ACCESS_TOKEN`, so a forgotten secret fails the deploy instead of serving an open API. Set to `true` in `fly.toml`. |
 | `ALLOWED_STT_HOSTS` | `api.deepgram.com` | Comma-separated allowlist of hosts the `base_url` override may target. A caller-supplied host outside this list is rejected with a 400. Add an AI Works host here to test a flow's `/v1/listen` compat endpoint. |
 | `MAX_TTS_CHARS` | `2000` | Caps TTS text length. TTS bills per character, so this is a spend cap. |
 | `MAX_UPLOAD_BYTES` | `104857600` | Caps upload size. |
@@ -129,10 +131,41 @@ forwarded the server's `Authorization: Token <key>` header there, which leaked
 the key to a destination the caller picked. Do not relax the allowlist to
 accept caller-supplied hosts.
 
-**Every endpoint is still unauthenticated.** The caps above limit the blast
-radius; they do not stop an anonymous caller from spending the key's budget.
-Put the app behind auth before sharing the URL widely, and use a scoped
-Deepgram key rather than an org-wide one.
+### The API is gated, the UI is not
+
+**`GET /` and `/static/*` are public on purpose** so a shared link is browsable
+and the params panel is explorable with no wall. Everything that spends the
+Deepgram key requires the token: `/upload`, `/files/*`, `/transcribe`,
+`/api/tts-transcribe`, `/api/tts-voices`, and the **SocketIO stream**.
+
+Mic and file streaming run over SocketIO, so that socket is part of the API
+surface even though the page opening it is public. **Do not exempt it.** The
+browser is attacker-controlled, so there is no way to authenticate "our own
+page" as distinct from a user: anyone who loads it can read its network calls
+and replay them. An ungated socket is a free key-spend path through the open UI.
+
+Three ways to send the token, in precedence order:
+
+```bash
+curl -H "X-App-Token: $APP_ACCESS_TOKEN" ...      # canonical
+curl -H "Authorization: Bearer $APP_ACCESS_TOKEN" ...
+curl "https://…/files/clip.wav?token=$APP_ACCESS_TOKEN"   # for <audio src>, which cannot send headers
+```
+
+Share the app as `https://your-app.fly.dev/?token=YOUR_TOKEN`. The frontend
+reads the token, stores it in `sessionStorage`, strips it back out of the
+visible URL so it does not leak into a screenshot, and attaches it to every
+call including the socket handshake. Scripts in `scripts/` read
+`APP_ACCESS_TOKEN` from the environment.
+
+```bash
+fly secrets set APP_ACCESS_TOKEN="$(openssl rand -hex 24)"
+```
+
+**Still open:** `cors_allowed_origins` is `"*"`, and there is no rate limit, so
+a holder of the token can still spend without bound. Use a scoped `usage:write`
+Deepgram key here rather than an org-wide one, and set a spend ceiling with
+alerting.
 
 ---
 
@@ -165,7 +198,7 @@ All values below are verified to work with the Deepgram streaming API:
 uv run pytest tests/ -v
 ```
 
-58 tests, 1 skipped. Tests use a real `UvicornTestServer` + `socketio.AsyncClient` — no mocking of the SocketIO layer.
+73 tests, 1 skipped. Tests use a real `UvicornTestServer` + `socketio.AsyncClient` — no mocking of the SocketIO layer.
 
 <!-- TODO: add screenshot of batch mode -->
 <!-- ![Deepgram STT Explorer — Batch Mode](docs/images/stt-batch.png) -->

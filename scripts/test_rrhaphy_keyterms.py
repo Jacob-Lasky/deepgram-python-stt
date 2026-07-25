@@ -4,6 +4,7 @@ TTS→STT round-trip test for rare medical "-rrhaphy" terms.
 Runs triplicates without keyterms, then triplicates with keyterms.
 Uses the /api/tts-transcribe endpoint on deepgram-python-stt.fly.dev.
 """
+import os
 import httpx
 import json
 import csv
@@ -16,6 +17,11 @@ from pathlib import Path
 SCRIPT_DIR = Path(__file__).resolve().parent
 
 BASE_URL = "https://deepgram-python-stt.fly.dev"
+# The API is token-gated. Export APP_ACCESS_TOKEN (same value as the fly secret)
+# so the harness can reach /api/tts-transcribe.
+APP_TOKEN = os.getenv("APP_ACCESS_TOKEN", "")
+AUTH_HEADERS = {"X-App-Token": APP_TOKEN} if APP_TOKEN else {}
+
 TTS_MODEL = "aura-2-asteria-en"
 STT_MODEL = "nova-3-medical"
 
@@ -74,7 +80,7 @@ def run_test(use_keyterms: bool) -> list[dict]:
                 }
                 print(f"\n  [{term}] trial {i+1}: {sentence}")
                 try:
-                    resp = client.post(f"{BASE_URL}/api/tts-transcribe", json=payload)
+                    resp = client.post(f"{BASE_URL}/api/tts-transcribe", json=payload, headers=AUTH_HEADERS)
                     resp.raise_for_status()
                     data = resp.json()
                     transcript = extract_transcript(data)

@@ -1,6 +1,8 @@
 # tests/test_security.py
-# Regression tests for the abuse surface of a PUBLIC, unauthenticated app.
-# Every test here corresponds to something verified exploitable on 2026-07-25.
+# Regression tests for this app's abuse surface. It holds a Deepgram key and
+# calls Deepgram on a caller's behalf, so every request field is hostile input.
+# The UI shell is public by design; the API and the SocketIO stream are gated.
+# Each case here corresponds to something verified exploitable on 2026-07-25.
 # Uses pytest-asyncio auto mode (no @pytest.mark.asyncio needed).
 import os
 from pathlib import Path
@@ -128,3 +130,124 @@ def test_no_api_key_in_static_assets():
         text = asset.read_text()
         assert "DEEPGRAM_API_KEY" not in text, f"key name leaked in {asset.name}"
         assert "ELEVENLABS_API_KEY" not in text, f"key name leaked in {asset.name}"
+
+
+# ---------------------------------------------------------------------------
+# API access token. The UI shell is deliberately public; everything that spends
+# the Deepgram key is gated, SocketIO included.
+# ---------------------------------------------------------------------------
+
+def test_require_auth_without_a_token_is_a_hard_error():
+    """A deployment must not be able to come up open because a secret was missed.
+
+    Runs in a subprocess on purpose. importlib.reload(app) would rebind the
+    module while conftest's session-scoped UvicornTestServer still holds the old
+    ASGI callable and its sio instance, which silently breaks the socket tests.
+    """
+    import subprocess
+    import sys
+
+    env = {
+        **os.environ,
+        "REQUIRE_AUTH": "true",
+        "DEEPGRAM_API_KEY": "test-key",
+        "PYTHONPATH": str(Path(__file__).resolve().parents[1]),
+    }
+    env.pop("APP_ACCESS_TOKEN", None)
+    proc = subprocess.run(
+        [sys.executable, "-c", "import app"],
+        capture_output=True, text=True, env=env,
+        cwd=Path(__file__).resolve().parents[1],
+    )
+    assert proc.returncode != 0, "app started with REQUIRE_AUTH and no token"
+    assert "APP_ACCESS_TOKEN" in proc.stderr
+
+
+def test_require_auth_with_a_token_starts_cleanly():
+    import subprocess
+    import sys
+
+    env = {
+        **os.environ,
+        "REQUIRE_AUTH": "true",
+        "APP_ACCESS_TOKEN": "a-token",
+        "DEEPGRAM_API_KEY": "test-key",
+        "PYTHONPATH": str(Path(__file__).resolve().parents[1]),
+    }
+    proc = subprocess.run(
+        [sys.executable, "-c", "import app; assert app.APP_ACCESS_TOKEN == 'a-token'"],
+        capture_output=True, text=True, env=env,
+        cwd=Path(__file__).resolve().parents[1],
+    )
+    assert proc.returncode == 0, proc.stderr
+
+
+def test_token_gate_is_off_when_no_token_is_configured():
+    """Local dev and this suite run open; the gate is opt-in via the env var."""
+    assert app.APP_ACCESS_TOKEN == ""
+    assert app._require_api_token(_FakeRequest()) is None
+
+
+class _FakeRequest:
+    """Minimal stand-in for starlette Request: headers + query_params only."""
+
+    def __init__(self, headers=None, query=None):
+        self.headers = headers or {}
+        self.query_params = query or {}
+
+
+@pytest.mark.parametrize("headers,query", [
+    ({}, {}),                                        # nothing supplied
+    ({"x-app-token": "wrong"}, {}),                  # wrong header
+    ({"authorization": "Bearer wrong"}, {}),         # wrong bearer
+    ({}, {"token": "wrong"}),                        # wrong query param
+    ({"x-app-token": ""}, {"token": "wrong"}),       # empty header, wrong query
+])
+def test_token_gate_rejects_bad_credentials(monkeypatch, headers, query):
+    from fastapi import HTTPException
+    monkeypatch.setattr(app, "APP_ACCESS_TOKEN", "right-token")
+    with pytest.raises(HTTPException) as exc:
+        app._require_api_token(_FakeRequest(headers, query))
+    assert exc.value.status_code == 401
+
+
+@pytest.mark.parametrize("headers,query", [
+    ({"x-app-token": "right-token"}, {}),
+    ({"authorization": "Bearer right-token"}, {}),
+    ({"authorization": "bearer right-token"}, {}),   # scheme is case-insensitive
+    ({}, {"token": "right-token"}),                  # <audio src> has no headers
+])
+def test_token_gate_accepts_good_credentials(monkeypatch, headers, query):
+    monkeypatch.setattr(app, "APP_ACCESS_TOKEN", "right-token")
+    assert app._require_api_token(_FakeRequest(headers, query)) is None
+
+
+def test_ui_shell_is_public_but_key_spending_routes_are_gated():
+    """The whole point of the design: browsable page, gated capability."""
+    gated, open_routes = set(), set()
+    for route in app.fastapi_app.routes:
+        path = getattr(route, "path", None)
+        if path is None:
+            continue
+        names = [d.dependency.__name__ for d in getattr(route, "dependencies", [])]
+        (gated if "_require_api_token" in names else open_routes).add(path)
+
+    assert "/" in open_routes, "the UI shell must stay public"
+    for path in ("/upload", "/files/{filename}", "/transcribe",
+                 "/api/tts-transcribe", "/api/tts-voices"):
+        assert path in gated, f"{path} spends the Deepgram key and must be gated"
+
+
+def test_socketio_connect_is_gated_too():
+    """Mic streaming spends the key over the socket, so an open socket is a hole."""
+    src = (Path(__file__).resolve().parents[1] / "app.py").read_text()
+    connect = src.split("async def connect(")[1].split("async def disconnect")[0]
+    assert "APP_ACCESS_TOKEN" in connect, "connect handler does not check the token"
+    assert "ConnectionRefusedError" in connect, "connect handler does not refuse"
+    assert "compare_digest" in connect, "connect handler must not use == on a secret"
+
+
+def test_token_comparison_is_constant_time():
+    src = (Path(__file__).resolve().parents[1] / "app.py").read_text()
+    body = src.split("def _require_api_token(")[1].split("\nclass ")[0]
+    assert "compare_digest" in body, "use secrets.compare_digest, not =="
