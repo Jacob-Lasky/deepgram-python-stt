@@ -15,12 +15,33 @@ it survived because no test ever looked at a URL.
 No Deepgram credential is needed, and none should ever be added here: the server
 is ours, the handshake is local, and the assertion is on the path string.
 """
+import inspect
+
 import pytest
 from deepgram import AsyncDeepgramClient
 from deepgram.environment import DeepgramClientEnvironment
 from websockets.asyncio.server import serve
 
 from app import _params_to_sdk_kwargs
+
+
+def _local_environment(port: int) -> DeepgramClientEnvironment:
+    """Point every SDK endpoint at our loopback server.
+
+    Built by introspecting the constructor rather than naming its fields, because
+    the SDK adds URL fields between regenerations — 7.0 added `agent_rest`, which
+    broke this helper with a TypeError while the app itself was fine. Enumerating
+    the signature means the next added field costs nothing.
+    """
+    ws = f"ws://127.0.0.1:{port}"
+    http = f"http://127.0.0.1:{port}"
+    fields = inspect.signature(DeepgramClientEnvironment.__init__).parameters
+    kwargs = {
+        name: (http if "rest" in name or name == "base" else ws)
+        for name in fields
+        if name != "self"
+    }
+    return DeepgramClientEnvironment(**kwargs)
 
 
 async def _handshake_path(params: dict) -> str:
@@ -33,12 +54,9 @@ async def _handshake_path(params: dict) -> str:
 
     async with await serve(handler, "127.0.0.1", 0) as server:
         port = server.sockets[0].getsockname()[1]
-        url = f"ws://127.0.0.1:{port}"
         dg = AsyncDeepgramClient(
             api_key="wire-contract-test-key",
-            environment=DeepgramClientEnvironment(
-                base=f"http://127.0.0.1:{port}", production=url, agent=url
-            ),
+            environment=_local_environment(port),
         )
         try:
             async with dg.listen.v1.connect(**_params_to_sdk_kwargs(params)):
