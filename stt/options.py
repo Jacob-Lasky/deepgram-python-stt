@@ -17,6 +17,23 @@ BATCH_ONLY = {"paragraphs", "topics", "intents", "sentiment", "utterances"}
 # Params that should never be sent to Deepgram (handled by client)
 INTERNAL_PARAMS = {"base_url"}
 
+# UI-internal name -> Deepgram wire name.
+#
+# The frontend models these as plural lists (`keyterms`, `tags`) but Deepgram's
+# parameters are singular and repeated once per value (`keyterm`, `tag`).
+# Translating here, at the single parameter gate, makes every call site correct
+# at once.
+#
+# This bug was live and it failed in two different ways, which is why the alias
+# belongs in code and not in a comment telling people to remember:
+#   - Streaming raised `AsyncV1Client.connect() got an unexpected keyword
+#     argument 'keyterms'`, because the SDK only accepts `keyterm`.
+#   - Batch SILENTLY IGNORED it. Deepgram drops unknown query params without
+#     erroring, so a "with keyterms" experiment ran with no boost applied and
+#     looked like evidence that keyterms do not help.
+# DO NOT rename the UI field to work around this; the alias is the fix.
+PARAM_ALIASES = {"keyterms": "keyterm", "tags": "tag"}
+
 # Params a caller must never be able to set, on any endpoint.
 # `callback` makes Deepgram POST the finished transcript to a URL of the
 # caller's choosing, so on a public unauthenticated app it is a data-exfil
@@ -29,7 +46,7 @@ DENIED_PARAMS = {"callback"}
 def clean_params(params: dict, mode: Mode) -> dict:
     """
     Remove internal params, mode-incompatible params, empty/falsy values,
-    and handle special cases (keyterms list, redact list, etc.)
+    and map UI-internal names to Deepgram wire names (see PARAM_ALIASES).
     Returns clean dict ready to send to Deepgram as query params.
     """
     result = {}
@@ -45,10 +62,7 @@ def clean_params(params: dict, mode: Mode) -> dict:
             continue
         if isinstance(value, bool) and not value:
             continue
-        result[key] = value
-
-    # Handle keyterms: list of "term" or "term:weight" strings -> repeated keyterm= params
-    # (handled by requests library when value is a list)
+        result[PARAM_ALIASES.get(key, key)] = value
 
     # Handle extra params: merge into result.
     # Re-apply the deny list here. This merge runs AFTER the filter loop above,
@@ -57,7 +71,7 @@ def clean_params(params: dict, mode: Mode) -> dict:
     if "extra" in result and isinstance(result["extra"], dict):
         extra = result.pop("extra")
         result.update({
-            k: v for k, v in extra.items()
+            PARAM_ALIASES.get(k, k): v for k, v in extra.items()
             if k not in DENIED_PARAMS and k not in INTERNAL_PARAMS
         })
 

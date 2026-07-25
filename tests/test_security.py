@@ -153,8 +153,13 @@ def test_require_auth_without_a_token_is_a_hard_error():
         "REQUIRE_AUTH": "true",
         "DEEPGRAM_API_KEY": "test-key",
         "PYTHONPATH": str(Path(__file__).resolve().parents[1]),
+        # Set EMPTY rather than popping it. app.py calls load_dotenv(), which
+        # would repopulate a missing key from the repo's gitignored .env and
+        # make this assertion depend on the developer's local file. dotenv does
+        # not override a key already present in the environment, even when its
+        # value is the empty string, so this is hermetic either way.
+        "APP_ACCESS_TOKEN": "",
     }
-    env.pop("APP_ACCESS_TOKEN", None)
     proc = subprocess.run(
         [sys.executable, "-c", "import app"],
         capture_output=True, text=True, env=env,
@@ -206,10 +211,16 @@ def _reset_rate_limits():
     app._anon_global_hits.clear()
 
 
-def test_everyone_is_privileged_when_no_token_is_configured():
-    """Local dev and this suite run with the limits off."""
-    assert app.APP_ACCESS_TOKEN == ""
+def test_everyone_is_privileged_when_no_token_is_configured(monkeypatch):
+    """With no token configured, the limits are off.
+
+    DO NOT assert on the ambient app.APP_ACCESS_TOKEN here. app.py calls
+    load_dotenv() at import, so a developer with APP_ACCESS_TOKEN in the repo's
+    gitignored .env would fail this test for no real reason. Pin the value.
+    """
+    monkeypatch.setattr(app, "APP_ACCESS_TOKEN", "")
     assert app._is_privileged("") is True
+    assert app._is_privileged("anything") is True
     req = _FakeRequest()
     assert app._enforce_access(req) is None
     assert req.state.privileged is True

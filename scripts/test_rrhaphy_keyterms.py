@@ -6,6 +6,9 @@ Uses the /api/tts-transcribe endpoint on deepgram-python-stt.fly.dev.
 """
 import os
 import httpx
+from dotenv import load_dotenv
+
+load_dotenv()
 import json
 import csv
 import sys
@@ -60,7 +63,10 @@ def run_test(use_keyterms: bool) -> list[dict]:
     stt_params = {"model": STT_MODEL, "smart_format": True}
     if use_keyterms:
         # keyterms with intensifier boost
-        stt_params["keyterms"] = list(TERMS)
+        # Canonical Deepgram wire name. stt.options.PARAM_ALIASES also maps the
+        # UI's plural "keyterms", but be explicit here: sending the wrong name
+        # to the batch API is silently ignored, which invalidated an earlier run.
+        stt_params["keyterm"] = list(TERMS)
 
     label = "WITH keyterms" if use_keyterms else "WITHOUT keyterms"
     print(f"\n{'='*60}")

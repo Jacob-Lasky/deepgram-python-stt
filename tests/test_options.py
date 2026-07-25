@@ -63,4 +63,96 @@ def test_list_values_kept():
     params = {"redact": ["pci", "ssn"], "keyterms": ["hello:2", "world"]}
     result = clean_params(params, Mode.STREAMING)
     assert result["redact"] == ["pci", "ssn"]
-    assert result["keyterms"] == ["hello:2", "world"]
+    # keyterms is aliased to Deepgram's singular wire name; see PARAM_ALIASES.
+    assert result["keyterm"] == ["hello:2", "world"]
+
+
+# ---------------------------------------------------------------------------
+# keyterms -> keyterm. This was a live bug that failed two different ways:
+# streaming raised "unexpected keyword argument 'keyterms'", and batch silently
+# ignored it so a keyterm experiment ran with no boost applied.
+# ---------------------------------------------------------------------------
+
+def test_keyterms_is_aliased_to_the_wire_name():
+    from stt.options import clean_params, Mode
+    out = clean_params({"model": "nova-3", "keyterms": ["alpha", "beta"]}, Mode.STREAMING)
+    assert "keyterms" not in out, "the UI-internal plural must never reach Deepgram"
+    assert out["keyterm"] == ["alpha", "beta"]
+
+
+def test_keyterms_alias_applies_in_batch_mode_too():
+    """Batch is where the wrong name was silently dropped rather than erroring."""
+    from stt.options import clean_params, Mode
+    out = clean_params({"keyterms": ["alpha"]}, Mode.BATCH)
+    assert out == {"keyterm": ["alpha"]}
+
+
+def test_keyterms_alias_applies_through_extra():
+    from stt.options import clean_params, Mode
+    out = clean_params({"extra": {"keyterms": ["alpha"]}}, Mode.BATCH)
+    assert out == {"keyterm": ["alpha"]}
+
+
+def test_keyterm_passed_directly_is_untouched():
+    from stt.options import clean_params, Mode
+    out = clean_params({"keyterm": ["alpha"]}, Mode.STREAMING)
+    assert out == {"keyterm": ["alpha"]}
+
+
+def test_query_string_repeats_keyterm_per_item():
+    from stt.options import query_string, Mode
+    qs = query_string({"keyterms": ["one", "two words"]}, Mode.STREAMING)
+    assert qs.count("keyterm=") == 2
+    assert "keyterms=" not in qs
+
+
+def test_sdk_accepts_every_serialized_param_name():
+    """Guards the whole class of bug: a param name the SDK rejects raises
+    TypeError at connect() and kills the stream. Assert every name we emit for
+    streaming is a real connect() keyword."""
+    import inspect
+    from deepgram import AsyncDeepgramClient
+    from stt.options import serialize_params, Mode
+
+    accepted = set(inspect.signature(
+        AsyncDeepgramClient(api_key="x").listen.v1.connect
+    ).parameters)
+
+    import json
+    from pathlib import Path
+    defaults = json.loads(
+        (Path(__file__).resolve().parents[1] / "config" / "defaults.json").read_text()
+    )
+    # Give every default a truthy value so none are dropped as falsy.
+    probe = {}
+    for k, v in defaults.items():
+        if isinstance(v, bool):
+            probe[k] = True
+        elif isinstance(v, list):
+            probe[k] = ["x"]
+        elif isinstance(v, dict):
+            continue          # `extra` is a passthrough bag, not a param itself
+        elif isinstance(v, (int, float)):
+            probe[k] = v or 1
+        else:
+            probe[k] = "x"
+
+    emitted = set(serialize_params(probe, Mode.STREAMING))
+
+    # Every emitted param must reach the wire by one of the two routes, and the
+    # ones the SDK does not name must go through the passthrough rather than
+    # being dropped or raising TypeError at connect().
+    import app
+    built = app._params_to_sdk_kwargs(probe)
+    via_kwargs = set(built) - {"request_options"}
+    via_query = set(
+        built.get("request_options", {}).get("additional_query_parameters", {})
+    )
+
+    assert via_kwargs <= accepted, f"would raise TypeError at connect(): {sorted(via_kwargs - accepted)}"
+    dropped = emitted - via_kwargs - via_query
+    assert not dropped, f"params silently dropped, never reaching Deepgram: {sorted(dropped)}"
+    # These are real Deepgram params the SDK does not enumerate; they must be
+    # routed, not lost. Regression guard for the keyterms crash class.
+    for name in ("filler_words", "no_delay", "word_confidence"):
+        assert name in via_query, f"{name} is not being forwarded"

@@ -1,4 +1,5 @@
 import asyncio
+import inspect
 import json as json_mod
 import logging
 import os
@@ -759,12 +760,42 @@ async def transcribe(request: Request):
 
 # --- Helper functions ---
 
+# Parameter names deepgram-sdk's connect() actually enumerates as keywords.
+# Computed from the installed SDK, never hardcoded: the set grows between SDK
+# releases, and a hardcoded copy silently rots into the bug below.
+_SDK_CONNECT_KWARGS = frozenset(
+    inspect.signature(AsyncDeepgramClient(api_key="_").listen.v1.connect).parameters
+) - {"self", "request_options"}
+
+
 def _params_to_sdk_kwargs(raw_params: dict) -> dict:
-    """Convert frontend params dict to deepgram-sdk 6.x keyword args.
-    model is required by connect() — default to nova-2 if not provided.
+    """Convert a frontend params dict into deepgram-sdk 6.x connect() arguments.
+
+    Splits into two buckets, because the SDK enumerates only ~28 of Deepgram's
+    query parameters as keywords and raises TypeError on anything else:
+
+        AsyncV1Client.connect() got an unexpected keyword argument 'keyterms'
+
+    That killed the stream for `keyterms`, and equally for `filler_words`,
+    `no_delay`, `word_confidence`, `alternatives`, `diarize_version` and
+    `entity_prompt`, all of which are real Deepgram params the UI exposes.
+    Anything the SDK does not name is forwarded verbatim through
+    RequestOptions.additional_query_parameters, so it still reaches the wire.
+
+    DO NOT "fix" a future occurrence by deleting the param from the UI. Add it
+    to nothing: the split handles unknown names automatically, and widens on its
+    own when a newer SDK starts naming them.
+
+    model is required by connect(), so default it.
     """
-    kwargs = serialize_params(raw_params, Mode.STREAMING)
-    kwargs.setdefault("model", "nova-2")
+    serialized = serialize_params(raw_params, Mode.STREAMING)
+    serialized.setdefault("model", "nova-2")
+
+    kwargs = {k: v for k, v in serialized.items() if k in _SDK_CONNECT_KWARGS}
+    passthrough = {k: v for k, v in serialized.items() if k not in _SDK_CONNECT_KWARGS}
+    if passthrough:
+        logger.debug("params not named by the SDK, sent as query: %s", sorted(passthrough))
+        kwargs["request_options"] = {"additional_query_parameters": passthrough}
     return kwargs
 
 

@@ -6,6 +6,9 @@ Uses /api/tts-transcribe on deepgram-python-stt.fly.dev.
 """
 import os
 import httpx
+from dotenv import load_dotenv
+
+load_dotenv()
 import csv
 import sys
 from datetime import datetime
