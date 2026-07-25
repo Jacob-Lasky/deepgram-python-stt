@@ -5,6 +5,7 @@ outputs/*
 
 # Generated evidence from scripts/. Regenerable; keep deliberately, not by accident.
 scripts/*.csv
+scripts/probe-artifacts/
 
 # Claude Code local overrides
 .claude/settings.local.json

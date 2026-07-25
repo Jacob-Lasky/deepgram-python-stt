@@ -31,6 +31,11 @@ dev = [
     # [project] dependencies: the async app must never ship the sync
     # websocket-client path again (see test_websocket_client_not_a_runtime_dep).
     "websocket-client>=1.9.0",
+    # scripts/probe_ui.py only. A UI change needs a real-browser artifact; a
+    # passing suite says nothing about the rendered DOM. The pip package is all
+    # CI installs — the browser binary is a separate opt-in
+    # (`uv run playwright install chromium`), so this does not slow the test job.
+    "playwright>=1.61.0",
 ]
 
 [tool.pytest.ini_options]
