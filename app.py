@@ -31,6 +31,67 @@ PORT = int(os.getenv("PORT", 8001))
 TEMP_DIR = Path(tempfile.gettempdir()) / "deepgram-stt"
 TEMP_DIR.mkdir(exist_ok=True)
 
+# --- Security: outbound destination allowlist ---
+# DO NOT interpolate a caller-supplied base_url into an outbound URL that
+# carries DEEPGRAM_API_KEY. A free-form base_url let any caller choose the
+# destination host AND inject path/query, which forwarded this server's API
+# key to a host of their choosing. Verified exploitable 2026-07-25: a request
+# with base_url="postman-echo.com/post?x=" delivered "Token <key>" to that
+# third party. The allowlist is operator-controlled via env, never caller
+# controlled, and the host must be a BARE hostname with optional port so no
+# path, query, fragment, or userinfo can be smuggled in.
+DEEPGRAM_HOST = "api.deepgram.com"
+ALLOWED_STT_HOSTS = {
+    h.strip().lower()
+    for h in os.getenv("ALLOWED_STT_HOSTS", DEEPGRAM_HOST).split(",")
+    if h.strip()
+}
+_BARE_HOST_RE = re.compile(r"^[a-z0-9]([a-z0-9.-]*[a-z0-9])?(:\d{1,5})?$")
+
+# Caps so an unauthenticated caller cannot run up an unbounded bill or fill the
+# disk. TTS is billed per character and STT per audio-minute, so the text cap is
+# a spend cap, not just a validation nicety.
+MAX_TTS_CHARS = int(os.getenv("MAX_TTS_CHARS", 2000))
+MAX_UPLOAD_BYTES = int(os.getenv("MAX_UPLOAD_BYTES", 100 * 1024 * 1024))
+
+
+class HostNotAllowed(ValueError):
+    """Caller-supplied base_url is malformed or not in ALLOWED_STT_HOSTS."""
+
+
+def _resolve_stt_host(params: dict) -> str:
+    """Validate a caller-supplied base_url against the operator allowlist.
+
+    Returns a bare host safe to interpolate into an outbound URL that carries
+    the server's Deepgram credential. Raises HostNotAllowed otherwise.
+    """
+    raw = (params.get("base_url") or DEEPGRAM_HOST).strip().lower()
+    if not _BARE_HOST_RE.match(raw):
+        raise HostNotAllowed(
+            "base_url must be a bare hostname with optional port, "
+            "no scheme, path, query, or credentials"
+        )
+    if raw not in ALLOWED_STT_HOSTS:
+        raise HostNotAllowed(f"base_url host is not allowlisted: {raw}")
+    return raw
+
+
+def _safe_temp_path(filename: str) -> Path:
+    """Resolve an upload filename to a path guaranteed to sit inside TEMP_DIR.
+
+    DO NOT join a caller-supplied filename onto TEMP_DIR directly. Python's
+    Path join REPLACES the base when the right side is absolute, so
+    TEMP_DIR / "/etc/passwd" is "/etc/passwd", and "../" components traverse
+    out. Both were verified exploitable as arbitrary file writes 2026-07-25.
+    """
+    name = Path(filename or "").name
+    if not name or name in (".", "..") or name.startswith("."):
+        raise ValueError("invalid filename")
+    path = (TEMP_DIR / name).resolve()
+    if path.parent != TEMP_DIR.resolve():
+        raise ValueError("resolved path escapes the temp directory")
+    return path
+
 # 1. AsyncServer — async_mode MUST be "asgi" (not "gevent", not "threading")
 sio = socketio.AsyncServer(
     async_mode="asgi",
@@ -69,15 +130,26 @@ async def index():
 
 @fastapi_app.post("/upload")
 async def upload(file: UploadFile = File(...)):
-    path = TEMP_DIR / file.filename
+    try:
+        path = _safe_temp_path(file.filename)
+    except ValueError as e:
+        return JSONResponse({"error": str(e)}, status_code=400)
     content = await file.read()
+    if len(content) > MAX_UPLOAD_BYTES:
+        return JSONResponse(
+            {"error": f"file exceeds {MAX_UPLOAD_BYTES} bytes"}, status_code=413
+        )
     path.write_bytes(content)
-    return JSONResponse({"filename": file.filename, "size": path.stat().st_size})
+    # Report the sanitized name; the caller must use it for follow-up calls.
+    return JSONResponse({"filename": path.name, "size": path.stat().st_size})
 
 
 @fastapi_app.get("/files/{filename}")
 async def serve_file(filename: str):
-    path = TEMP_DIR / filename
+    try:
+        path = _safe_temp_path(filename)
+    except ValueError as e:
+        return JSONResponse({"error": str(e)}, status_code=400)
     if not path.exists():
         return JSONResponse({"error": "not found"}, status_code=404)
     return FileResponse(path)
@@ -119,7 +191,7 @@ async def _elevenlabs_tts_generate(text: str, voice_id: str, api_key: str) -> by
 async def _stt_batch(audio_bytes: bytes, stt_params: dict, api_key: str) -> dict:
     """Transcribe audio bytes via Deepgram pre-recorded (batch) API."""
     headers = {"Authorization": f"Token {api_key}"}
-    base_url = stt_params.get("base_url", "api.deepgram.com")
+    base_url = _resolve_stt_host(stt_params)
     clean = clean_params(stt_params, Mode.BATCH)
     query_params = {}
     for k, v in clean.items():
@@ -148,11 +220,11 @@ async def _stt_streaming(text: str, tts_model: str, stt_params: dict, api_key: s
     speech speed, no buffering or artificial timing needed.
     Returns {"transcript": str, "segments": list, "raw_responses": list}.
     """
-    base_url = stt_params.get("base_url", "api.deepgram.com")
+    base_url = _resolve_stt_host(stt_params)
     headers = {"Authorization": f"Token {api_key}"}
 
     # For custom endpoints (e.g. aiworks), use raw websockets instead of the SDK
-    if base_url != "api.deepgram.com":
+    if base_url != DEEPGRAM_HOST:
         return await _stt_streaming_raw(text, tts_model, stt_params, api_key)
 
     dg = AsyncDeepgramClient(api_key=api_key)
@@ -197,7 +269,7 @@ async def _stt_streaming_raw(text: str, tts_model: str, stt_params: dict, api_ke
     Uses raw websockets since the Deepgram SDK only connects to api.deepgram.com.
     Returns full raw responses so callers can inspect the response schema.
     """
-    base_url = stt_params.get("base_url", "api.deepgram.com")
+    base_url = _resolve_stt_host(stt_params)
     clean = clean_params(stt_params, Mode.STREAMING)
     query_parts = []
     for k, v in clean.items():
@@ -356,8 +428,16 @@ async def tts_transcribe(request: Request):
 
     if not text:
         return JSONResponse({"error": "text is required"}, status_code=400)
+    if len(text) > MAX_TTS_CHARS:
+        return JSONResponse(
+            {"error": f"text exceeds {MAX_TTS_CHARS} characters"}, status_code=413
+        )
     if mode not in ("batch", "streaming", "both"):
         return JSONResponse({"error": "mode must be batch, streaming, or both"}, status_code=400)
+    try:
+        _resolve_stt_host(stt_params)
+    except HostNotAllowed as e:
+        return JSONResponse({"error": str(e)}, status_code=400)
 
     api_key = os.getenv("DEEPGRAM_API_KEY", "")
 
@@ -411,7 +491,10 @@ async def transcribe(request: Request):
         return JSONResponse({"error": "url or filename required"}, status_code=400)
 
     api_key = os.getenv("DEEPGRAM_API_KEY", "")
-    base_url = params.get("base_url", "api.deepgram.com")
+    try:
+        base_url = _resolve_stt_host(params)
+    except HostNotAllowed as e:
+        return JSONResponse({"error": str(e)}, status_code=400)
 
     # Build clean query params for batch mode, convert bools to lowercase strings
     clean = clean_params(params, Mode.BATCH)
@@ -451,9 +534,9 @@ async def transcribe(request: Request):
             resp.raise_for_status()
             return JSONResponse(resp.json())
     except httpx.HTTPStatusError as e:
-        return JSONResponse({"error": str(e)}, status_code=e.response.status_code)
+        return JSONResponse({"error": _clean_error(e)}, status_code=e.response.status_code)
     except Exception as e:
-        return JSONResponse({"error": str(e)}, status_code=500)
+        return JSONResponse({"error": _clean_error(e)}, status_code=500)
 
 
 # --- Helper functions ---

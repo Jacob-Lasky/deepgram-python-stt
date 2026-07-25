@@ -16,6 +16,14 @@ BATCH_ONLY = {"paragraphs", "topics", "intents", "sentiment", "utterances"}
 # Params that should never be sent to Deepgram (handled by client)
 INTERNAL_PARAMS = {"base_url"}
 
+# Params a caller must never be able to set, on any endpoint.
+# `callback` makes Deepgram POST the finished transcript to a URL of the
+# caller's choosing, so on a public unauthenticated app it is a data-exfil
+# primitive AND a way to run arbitrary async jobs on the server's account.
+# DO NOT move this into INTERNAL_PARAMS: those are stripped because the client
+# consumes them, these are stripped because forwarding them is a vulnerability.
+DENIED_PARAMS = {"callback"}
+
 
 def clean_params(params: dict, mode: Mode) -> dict:
     """
@@ -25,7 +33,7 @@ def clean_params(params: dict, mode: Mode) -> dict:
     """
     result = {}
     for key, value in params.items():
-        if key in INTERNAL_PARAMS:
+        if key in INTERNAL_PARAMS or key in DENIED_PARAMS:
             continue
         if mode == Mode.STREAMING and key in BATCH_ONLY:
             continue
@@ -41,9 +49,15 @@ def clean_params(params: dict, mode: Mode) -> dict:
     # Handle keyterms: list of "term" or "term:weight" strings -> repeated keyterm= params
     # (handled by requests library when value is a list)
 
-    # Handle extra params: merge into result
+    # Handle extra params: merge into result.
+    # Re-apply the deny list here. This merge runs AFTER the filter loop above,
+    # so without it a caller smuggles a blocked param straight through as
+    # extra={"callback": "..."} and the deny list above does nothing.
     if "extra" in result and isinstance(result["extra"], dict):
         extra = result.pop("extra")
-        result.update(extra)
+        result.update({
+            k: v for k, v in extra.items()
+            if k not in DENIED_PARAMS and k not in INTERNAL_PARAMS
+        })
 
     return result
