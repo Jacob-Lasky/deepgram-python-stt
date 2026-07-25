@@ -178,7 +178,11 @@ def test_sdk_accepts_every_serialized_param_name():
     # lost. Regression guard for the keyterms crash class. filler_words is NOT in
     # this list: Deepgram's docs mark it stream-unavailable, so it is stripped in
     # streaming mode by design — see test_stream_unavailable_params_are_stripped.
-    for name in ("no_delay", "word_confidence", "diarize_version", "entity_prompt"):
+    # `diarize_version` is deliberately absent from this list: the UI now models
+    # the current `diarize_model`, which deepgram-sdk 7 names as a real kwarg, so
+    # it rides via_kwargs rather than the passthrough. See
+    # test_diarize_model_is_a_named_sdk_kwarg_not_passthrough.
+    for name in ("no_delay", "word_confidence", "entity_prompt", "alternatives"):
         assert name in via_query, f"{name} is not being forwarded"
 
 
@@ -283,3 +287,46 @@ def test_alias_cannot_smuggle_a_denied_wire_name():
         options.PARAM_ALIASES = original
 
     assert "callback" in DENIED_PARAMS
+
+
+def test_diarize_model_wins_over_the_deprecated_diarize_params():
+    """Deepgram rejects the combination outright rather than picking a winner:
+
+        400 diarize_model cannot be used together with diarize or
+            diarize_version. (INVALID_QUERY_PARAMETER)
+
+    Verified live. diarize_model is kept because it is the current parameter and
+    the only route to the v2 diarizer; the boolean `diarize` always selects v1.
+    """
+    from stt.options import clean_params, Mode
+    out = clean_params(
+        {"model": "nova-3", "diarize": True, "extra": {"diarize_model": "v2"}},
+        Mode.BATCH,
+    )
+    assert out["diarize_model"] == "v2"
+    assert "diarize" not in out
+    assert "diarize_version" not in out
+
+    out = clean_params(
+        {"model": "nova-3", "extra": {"diarize_model": "latest", "diarize_version": "latest"}},
+        Mode.BATCH,
+    )
+    assert out["diarize_model"] == "latest"
+    assert "diarize_version" not in out
+
+
+def test_deprecated_diarize_still_works_alone():
+    """Legacy customer configs send the boolean, and replicating those is a job
+    this tool has. It must keep working when diarize_model is absent."""
+    from stt.options import clean_params, Mode
+    out = clean_params({"model": "nova-3", "diarize": True}, Mode.BATCH)
+    assert out["diarize"] is True
+    assert "diarize_model" not in out
+
+
+def test_diarize_model_is_a_named_sdk_kwarg_not_passthrough():
+    """deepgram-sdk 7 added diarize_model to connect(); it should ride as a real
+    kwarg rather than through additional_query_parameters."""
+    import app
+    built = app._params_to_sdk_kwargs({"model": "nova-3", "extra": {"diarize_model": "latest"}})
+    assert built.get("diarize_model") == "latest"

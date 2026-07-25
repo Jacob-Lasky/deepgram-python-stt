@@ -15,7 +15,7 @@
   "dictation": false,
   "profanity_filter": false,
   "diarize": false,
-  "diarize_version": "",
+  "diarize_model": "",
   "detect_entities": false,
   "multichannel": false,
   "utterances": false,

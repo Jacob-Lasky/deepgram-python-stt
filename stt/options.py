@@ -173,6 +173,22 @@ def clean_params(params: dict, mode: Mode) -> dict:
                 continue
             _put(result, wire, v)
 
+    # `diarize_model` is mutually exclusive with the deprecated `diarize` and
+    # `diarize_version`. Deepgram does not pick a winner, it rejects outright:
+    #
+    #   400 diarize_model cannot be used together with diarize or
+    #       diarize_version. (INVALID_QUERY_PARAMETER)
+    #
+    # `diarize_model` wins here because it is the current parameter and the only
+    # way to reach the v2 diarizer: the boolean `diarize` ALWAYS routes to v1,
+    # and `diarize_version` is legacy. The UI already makes the two controls
+    # exclusive; this covers the `extra` escape hatch and any saved config from
+    # before the field was renamed, so an old preset degrades to the modern
+    # parameter instead of a hard 400.
+    if "diarize_model" in result:
+        for legacy in ("diarize", "diarize_version"):
+            result.pop(legacy, None)
+
     return result
 
 
