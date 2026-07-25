@@ -24,13 +24,20 @@ INTERNAL_PARAMS = {"base_url"}
 # Translating here, at the single parameter gate, makes every call site correct
 # at once.
 #
+# `keyterm` is KEYTERM PROMPTING (Nova-3 and Flux). It improves Keyword Recall
+# Rate and takes BARE TERMS ONLY. It is NOT keyword boosting and has NO
+# intensifier syntax: a value of "term:2" prompts for the literal string
+# "term:2". Weighted boosting is the separate, legacy `keywords` parameter
+# (Nova-2 and older), which this app deliberately does not support.
+# Join words with %20 or + to prompt a multi-word phrase as one cohesive unit.
+#
 # This bug was live and it failed in two different ways, which is why the alias
 # belongs in code and not in a comment telling people to remember:
 #   - Streaming raised `AsyncV1Client.connect() got an unexpected keyword
 #     argument 'keyterms'`, because the SDK only accepts `keyterm`.
 #   - Batch SILENTLY IGNORED it. Deepgram drops unknown query params without
-#     erroring, so a "with keyterms" experiment ran with no boost applied and
-#     looked like evidence that keyterms do not help.
+#     erroring, so a "with keyterms" experiment ran with no keyterms applied at
+#     all and looked like evidence that keyterm prompting does not help.
 # DO NOT rename the UI field to work around this; the alias is the fix.
 PARAM_ALIASES = {"keyterms": "keyterm", "tags": "tag"}
 
@@ -40,7 +47,15 @@ PARAM_ALIASES = {"keyterms": "keyterm", "tags": "tag"}
 # primitive AND a way to run arbitrary async jobs on the server's account.
 # DO NOT move this into INTERNAL_PARAMS: those are stripped because the client
 # consumes them, these are stripped because forwarding them is a vulnerability.
-DENIED_PARAMS = {"callback"}
+DENIED_PARAMS = {
+    "callback",
+    # Legacy Nova-2-and-older keyword BOOSTING (`keywords=TERM:INTENSIFIER`).
+    # Deliberately unsupported: this app targets Nova-3 and Flux, where the
+    # equivalent is Keyterm Prompting via `keyterm`. Keeping a Nova-2-only
+    # parameter in the UI invites sending it on a Nova-3 request, where Deepgram
+    # silently ignores it and the user concludes the feature does not work.
+    "keywords",
+}
 
 
 def clean_params(params: dict, mode: Mode) -> dict:

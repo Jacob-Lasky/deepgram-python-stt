@@ -60,17 +60,20 @@ def test_extra_dict_merged():
 
 
 def test_list_values_kept():
-    params = {"redact": ["pci", "ssn"], "keyterms": ["hello:2", "world"]}
+    # Bare terms only. "hello:2" would be a keyWORDS intensifier, which is a
+    # different (Nova-2-only) parameter; as a keyterm it prompts for the literal
+    # string "hello:2".
+    params = {"redact": ["pci", "ssn"], "keyterms": ["hello", "world"]}
     result = clean_params(params, Mode.STREAMING)
     assert result["redact"] == ["pci", "ssn"]
     # keyterms is aliased to Deepgram's singular wire name; see PARAM_ALIASES.
-    assert result["keyterm"] == ["hello:2", "world"]
+    assert result["keyterm"] == ["hello", "world"]
 
 
 # ---------------------------------------------------------------------------
 # keyterms -> keyterm. This was a live bug that failed two different ways:
 # streaming raised "unexpected keyword argument 'keyterms'", and batch silently
-# ignored it so a keyterm experiment ran with no boost applied.
+# ignored it so a keyterm experiment ran with no keyterms applied at all.
 # ---------------------------------------------------------------------------
 
 def test_keyterms_is_aliased_to_the_wire_name():
@@ -156,3 +159,31 @@ def test_sdk_accepts_every_serialized_param_name():
     # routed, not lost. Regression guard for the keyterms crash class.
     for name in ("filler_words", "no_delay", "word_confidence"):
         assert name in via_query, f"{name} is not being forwarded"
+
+
+def test_nova2_keywords_is_not_supported():
+    """Deliberately dropped. `keywords` is Nova-2-and-older keyword BOOSTING
+    (`keywords=TERM:INTENSIFIER`); this app targets Nova-3 and Flux, where the
+    equivalent is Keyterm Prompting via `keyterm`. Leaving a Nova-2-only param
+    in the UI invites sending it on a Nova-3 request, where Deepgram silently
+    ignores it and the user concludes the feature is broken."""
+    from stt.options import clean_params, Mode
+    for mode in (Mode.BATCH, Mode.STREAMING):
+        assert "keywords" not in clean_params({"keywords": "term:2"}, mode)
+        assert "keywords" not in clean_params({"extra": {"keywords": "term:2"}}, mode)
+
+
+def test_keyterm_takes_bare_terms_not_intensifiers():
+    """Keyterm Prompting has NO intensifier syntax. Documented so nobody
+    reintroduces `term:2` thinking it weights the term; it would prompt for the
+    literal string. Weights belong to `keywords`, which is unsupported here."""
+    from stt.options import query_string, Mode
+    qs = query_string({"keyterms": ["perineorrhaphy"]}, Mode.STREAMING)
+    assert qs == "keyterm=perineorrhaphy"
+
+
+def test_keywords_gone_from_ui_defaults():
+    import json
+    from pathlib import Path
+    d = json.loads((Path(__file__).resolve().parents[1] / "config" / "defaults.json").read_text())
+    assert "keywords" not in d

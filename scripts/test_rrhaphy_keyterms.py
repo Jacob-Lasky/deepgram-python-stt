@@ -62,7 +62,7 @@ def run_test(use_keyterms: bool) -> list[dict]:
     rows = []
     stt_params = {"model": STT_MODEL, "smart_format": True}
     if use_keyterms:
-        # keyterms with intensifier boost
+        # Keyterm Prompting: bare terms, no intensifiers (that is `keywords`).
         # Canonical Deepgram wire name. stt.options.PARAM_ALIASES also maps the
         # UI's plural "keyterms", but be explicit here: sending the wrong name
         # to the batch API is silently ignored, which invalidated an earlier run.
