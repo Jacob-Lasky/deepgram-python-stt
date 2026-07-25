@@ -187,3 +187,49 @@ def test_keywords_gone_from_ui_defaults():
     from pathlib import Path
     d = json.loads((Path(__file__).resolve().parents[1] / "config" / "defaults.json").read_text())
     assert "keywords" not in d
+
+
+def test_alias_and_wire_name_from_two_sources_are_unioned_not_dropped():
+    """A caller can reach one wire param by two names at once: the UI's plural
+    `keyterms` and an explicit `extra={"keyterm": ...}`. A plain assignment
+    dropped one of them depending on dict order, which is invisible in a
+    transcript. Repeatable params union instead."""
+    from stt.options import clean_params, Mode
+    out = clean_params(
+        {"keyterms": ["alpha"], "extra": {"keyterm": ["beta"]}}, Mode.STREAMING
+    )
+    assert out["keyterm"] == ["alpha", "beta"]
+
+    # Order preserved, duplicates collapsed — a repeated keyterm is wire noise.
+    out = clean_params(
+        {"keyterms": ["alpha", "beta"], "extra": {"keyterm": "alpha"}}, Mode.STREAMING
+    )
+    assert out["keyterm"] == ["alpha", "beta"]
+
+
+def test_non_repeatable_collision_still_takes_one_value():
+    """Only params Deepgram accepts more than once are unioned. `model` is
+    single-valued: unioning it would put a list where a string belongs."""
+    from stt.options import clean_params, Mode
+    out = clean_params({"model": "nova-3", "extra": {"model": "nova-2"}}, Mode.STREAMING)
+    assert out["model"] == "nova-2"  # extra is the escape hatch and wins
+
+
+def test_alias_cannot_smuggle_a_denied_wire_name():
+    """The deny list is enforced on the name that actually goes on the wire, not
+    just the name the caller typed, so a future alias pointing at a denied param
+    cannot bypass it. Guards the invariant, not today's alias table."""
+    from stt.options import clean_params, Mode, PARAM_ALIASES, DENIED_PARAMS
+    import stt.options as options
+
+    original = dict(PARAM_ALIASES)
+    try:
+        options.PARAM_ALIASES = {**original, "harmless": "callback"}
+        out = clean_params({"harmless": "https://evil.example/x"}, Mode.BATCH)
+        assert out == {}, f"denied wire name reached the request: {out}"
+        out = clean_params({"extra": {"harmless": "https://evil.example/x"}}, Mode.BATCH)
+        assert out == {}, f"denied wire name reached the request via extra: {out}"
+    finally:
+        options.PARAM_ALIASES = original
+
+    assert "callback" in DENIED_PARAMS

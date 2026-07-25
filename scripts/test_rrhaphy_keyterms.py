@@ -4,16 +4,19 @@ TTS→STT round-trip test for rare medical "-rrhaphy" terms.
 Runs triplicates without keyterms, then triplicates with keyterms.
 Uses the /api/tts-transcribe endpoint on deepgram-python-stt.fly.dev.
 """
-import os
-import httpx
-from dotenv import load_dotenv
-
-load_dotenv()
-import json
 import csv
+import json
+import os
 import sys
 from datetime import datetime
 from pathlib import Path
+
+import httpx
+from dotenv import load_dotenv
+
+# Reads APP_ACCESS_TOKEN from the repo's gitignored .env so the harness gets the
+# privileged (un-rate-limited) tier. Must run before the getenv calls below.
+load_dotenv()
 
 # Output lands next to this script. DO NOT hardcode an absolute /coding path:
 # it pins the harness to one machine.
