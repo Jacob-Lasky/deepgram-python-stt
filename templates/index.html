@@ -389,6 +389,19 @@
       letter-spacing: 0.06em;
     }
 
+    .field-hint {
+      font-size: 11px;
+      line-height: 1.45;
+      color: #8b93a7;
+      margin-top: 5px;
+    }
+    .field-hint code {
+      background: #1a2234;
+      padding: 1px 4px;
+      border-radius: 3px;
+      color: #a5b4fc;
+    }
+
     .field-input {
       background: #1a1f2e;
       border: 1px solid #2d3748;
@@ -1319,9 +1332,14 @@
           </div>
           <div x-show="sections.features" class="param-section-body">
             <div class="checkbox-grid">
+              <!-- Deprecated boolean, kept because it is what legacy customer
+                   configs send and replicating those is a job this tool has.
+                   Always v1. Clears diarize_model because Deepgram 400s on the
+                   pair. -->
               <div class="checkbox-item">
-                <input type="checkbox" id="diarize" x-model="params.diarize">
-                <label for="diarize">Diarize</label>
+                <input type="checkbox" id="diarize" x-model="params.diarize"
+                       @change="if (params.diarize) params.diarize_model = ''">
+                <label for="diarize" title="Deprecated; always selects the v1 diarizer">Diarize (v1, deprecated)</label>
               </div>
               <div class="checkbox-item">
                 <input type="checkbox" id="detect_entities" x-model="params.detect_entities">
@@ -1340,17 +1358,34 @@
               </div>
             </div>
 
-            <!-- Diarize version -->
-            <template x-if="params.diarize">
-              <div class="field mt-2">
-                <div class="field-label">Diarize Version</div>
-                <select class="field-select" x-model="params.diarize_version">
-                  <option value="">Default</option>
-                  <option value="2021-07-14.0">2021-07-14.0</option>
-                  <option value="latest">latest</option>
-                </select>
+            <!-- Diarizer selection.
+                 DO NOT re-gate this behind params.diarize. It used to be, and
+                 that made v2 unreachable: `diarize` is the deprecated boolean
+                 and ALWAYS routes to v1, while `diarize_model` both enables
+                 diarization and picks the version, so it must be sent WITHOUT
+                 `diarize`. Deepgram rejects the pair outright:
+                   400 diarize_model cannot be used together with diarize or
+                       diarize_version. (INVALID_QUERY_PARAMETER)
+                 The two controls are mutually exclusive in the UI for that
+                 reason; setting one clears the other. -->
+            <div class="field mt-2">
+              <div class="field-label">Diarizer (diarize_model)</div>
+              <select class="field-select" x-model="params.diarize_model"
+                      @change="if (params.diarize_model) params.diarize = false">
+                <option value="">Off / use the deprecated Diarize checkbox</option>
+                <option value="v1">v1</option>
+                <option value="v2">v2 (batch only)</option>
+                <option value="latest">latest</option>
+              </select>
+              <div class="field-hint" x-show="params.diarize_model === 'v2' && mode !== 'batch'">
+                v2 is batch only. Deepgram rejects the WebSocket handshake for
+                <code>diarize_model=v2</code> on a stream; use <code>latest</code> there.
               </div>
-            </template>
+              <div class="field-hint" x-show="params.diarize_model">
+                Sends <code>diarize_model</code> and omits <code>diarize</code>.
+                The deprecated <code>diarize</code> checkbox always selects v1.
+              </div>
+            </div>
 
             <!-- Entity types when detect_entities enabled -->
             <template x-if="params.detect_entities">
