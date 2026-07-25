@@ -24,6 +24,10 @@ dev-dependencies = [
     "aiohttp>=3.9.0",
     "pytest>=8.0",
     "pytest-asyncio>=0.23,<1.0",
+    # scripts/ only, for stt/client.py's sync STTClient. DO NOT promote to
+    # [project] dependencies: the async app must never ship the sync
+    # websocket-client path again (see test_websocket_client_not_a_runtime_dep).
+    "websocket-client>=1.9.0",
 ]
 
 [tool.pytest.ini_options]
