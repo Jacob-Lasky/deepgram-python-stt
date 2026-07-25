@@ -250,9 +250,12 @@ fly deploy
 ```
 
 Pushing to `main` also deploys, via `.github/workflows/fly-deploy.yml`. That
-workflow has no test gate, so run `uv run pytest tests/ -q` first. **Check
-whether the running app is ahead of `main` before you push:** deploying `main`
-while production carries newer code silently reverts it.
+workflow itself has no test gate; `.github/workflows/test.yml` is the gate and
+runs the suite on every PR and every push to `main`. Keep it required on `main`
+in branch protection, or a red suite can still reach production.
+
+**Check whether the running app is ahead of `main` before you push:** deploying
+`main` while production carries newer code silently reverts it.
 
 The `fly.toml` and `Dockerfile` are already configured for uvicorn on port 8080.
 

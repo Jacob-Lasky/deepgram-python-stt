@@ -1,0 +1,38 @@
+name: Tests
+
+# The deploy workflow (fly-deploy.yml) has NO test gate: it deploys every push
+# to main. This workflow is the gate. Keep it required on main so a red suite
+# cannot reach production.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+
+      # Interpreter comes from pyproject's requires-python, never a hardcoded
+      # version that can drift away from the project.
+      - name: Set up Python
+        run: uv python install
+
+      - name: Install dependencies
+        run: uv sync --frozen
+
+      - name: Run tests
+        env:
+          # A fake key is correct: the suite asserts on wiring and accepts a
+          # Deepgram 401. It must never need a real credential to run, and it
+          # must never need APP_ACCESS_TOKEN either, since an unset token is the
+          # "everyone is privileged" path the tests rely on.
+          DEEPGRAM_API_KEY: ci-test-key
+        run: uv run pytest tests/ -q
