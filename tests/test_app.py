@@ -266,39 +266,36 @@ def test_unfinished_turn_notice_names_the_cause_and_keeps_the_text():
     assert len(notice["summary"]) < len(notice["message"])
 
 
-def test_pending_turn_tracks_only_unfinalised_flux_turns():
+def test_turn_tracker_tracks_only_unfinalised_flux_turns():
     """The notice must fire when a stream stops mid-turn and stay quiet
-    otherwise, so what sets and clears pending_turn is the whole contract."""
-    import asyncio
-
+    otherwise, so what sets and clears pending is the whole contract."""
     import app as app_mod
 
-    sid = "test-pending"
-    app_mod._sessions[sid] = {}
-    handler = app_mod._stream_message_handler(sid)
+    turns = app_mod._TurnTracker()
 
     def feed(event, transcript):
-        asyncio.run(handler({
+        turns.observe(app_mod._transcript_event({
             "type": "TurnInfo", "event": event, "transcript": transcript,
             "turn_index": 0,
         }))
 
-    try:
-        feed("StartOfTurn", "Actually,")
-        assert app_mod._sessions[sid]["pending_turn"] == "Actually,"
+    feed("StartOfTurn", "Actually,")
+    assert turns.pending == "Actually,"
 
-        feed("Update", "Actually, wait")
-        assert app_mod._sessions[sid]["pending_turn"] == "Actually, wait"
+    feed("Update", "Actually, wait")
+    assert turns.pending == "Actually, wait"
 
-        # EndOfTurn settles the turn: nothing is owed to the user any more.
-        feed("EndOfTurn", "Actually, wait.")
-        assert app_mod._sessions[sid]["pending_turn"] is None
+    # EndOfTurn settles the turn: nothing is owed to the user any more.
+    feed("EndOfTurn", "Actually, wait.")
+    assert turns.pending is None
 
-        # An empty Update between turns must not resurrect the notice.
-        feed("Update", "")
-        assert app_mod._sessions[sid]["pending_turn"] is None
-    finally:
-        app_mod._sessions.pop(sid, None)
+    # An empty Update between turns must not resurrect the notice.
+    feed("Update", "")
+    assert turns.pending is None
+
+    # ...and a turn that reopens after a settled one is pending again.
+    feed("StartOfTurn", "One more thing")
+    assert turns.pending == "One more thing"
 
 
 def test_v1_results_never_set_a_pending_turn():
@@ -310,7 +307,8 @@ def test_v1_results_never_set_a_pending_turn():
 
     sid = "test-pending-v1"
     app_mod._sessions[sid] = {}
-    handler = app_mod._stream_message_handler(sid)
+    turns = app_mod._TurnTracker()
+    handler = app_mod._stream_message_handler(sid, turns)
     # A real model, not a mock: the handler branches on isinstance, so a mock
     # that is not one would pass this test by taking the wrong branch.
     # model_construct skips validation — a valid Results needs a whole metadata
@@ -324,6 +322,82 @@ def test_v1_results_never_set_a_pending_turn():
     assert msg.channel.alternatives[0].transcript == "hello"
     try:
         asyncio.run(handler(msg))
-        assert "pending_turn" not in app_mod._sessions[sid]
+        assert turns.pending is None
     finally:
         app_mod._sessions.pop(sid, None)
+
+
+def test_flux_error_message_uses_code_and_description():
+    """ListenV2FatalError carries `code` and `description`; both belong in the
+    message, and neither should be dropped for a raw JSON dump."""
+    import app as app_mod
+
+    msg = app_mod._flux_error_message({
+        "type": "FatalError", "code": "AUDIO_DECODE", "description": "bad frame",
+    })
+    assert "bad frame" in msg and "AUDIO_DECODE" in msg and "{" not in msg
+
+
+def test_flux_configure_failure_says_there_is_no_reason():
+    """ListenV2ConfigureFailure has NO description field at all — only type,
+    request_id and sequence_id. Dumping that JSON tells the reader nothing and
+    looks like the app failed to parse it."""
+    import app as app_mod
+
+    msg = app_mod._flux_error_message({
+        "type": "ConfigureFailure", "request_id": "abc", "sequence_id": 4,
+    })
+    assert "no reason" in msg
+    assert "abc" not in msg  # not a raw dump
+
+
+def test_flux_error_message_is_redacted_before_it_leaves_the_server():
+    """The description comes from Deepgram, but this path also catches the raw
+    JSON fallback, so it goes through the same redaction as every other error."""
+    import app as app_mod
+
+    d = {"type": "FatalError", "description": "auth failed for Token sk-live-x"}
+    assert "sk-live-x" not in app_mod._redact_credentials(app_mod._flux_error_message(d))
+
+
+def test_keep_alive_is_refused_on_flux_even_if_the_sdk_grows_the_method():
+    """Gating on the endpoint, not on hasattr. /v2/listen has only Configure and
+    CloseStream; a later SDK regeneration that adds send_keep_alive must not make
+    this app start sending one."""
+    import asyncio
+
+    import app as app_mod
+
+    class WsWithKeepAlive:
+        async def send_keep_alive(self):
+            raise AssertionError("KeepAlive must never be sent on Flux")
+
+    async def check():
+        return app_mod._start_keep_alive(
+            "sid", WsWithKeepAlive(), asyncio.Event(), flux=True
+        )
+
+    assert asyncio.run(check()) is None
+
+
+def test_keep_alive_still_runs_on_v1():
+    import asyncio
+
+    import app as app_mod
+
+    class Ws:
+        async def send_keep_alive(self):
+            pass
+
+    async def check():
+        stop = asyncio.Event()
+        task = app_mod._start_keep_alive("sid", Ws(), stop, flux=False)
+        assert task is not None
+        stop.set()
+        task.cancel()
+        try:
+            await task
+        except asyncio.CancelledError:
+            pass
+
+    asyncio.run(check())

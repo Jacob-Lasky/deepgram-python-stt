@@ -590,6 +590,7 @@ async def _stt_streaming(text: str, tts_model: str, stt_params: dict, api_key: s
     sdk_kwargs = _params_to_sdk_kwargs(stt_params)
 
     segments = []
+    turns = _TurnTracker()
 
     async with _connect_stream(dg, sdk_kwargs) as ws:
         async def on_message(msg, **kwargs):
@@ -597,7 +598,10 @@ async def _stt_streaming(text: str, tts_model: str, stt_params: dict, api_key: s
             # Flux turn counts as a segment here on exactly the same rule
             # (EndOfTurn only) that makes it a final line in the browser.
             payload = _transcript_event(msg)
-            if payload and payload["is_final"] and payload["transcript"].strip():
+            if payload is None:
+                return
+            turns.observe(payload)
+            if payload["is_final"] and payload["transcript"].strip():
                 segments.append(payload["transcript"])
 
         ws.on(EventType.MESSAGE, on_message)
@@ -619,10 +623,18 @@ async def _stt_streaming(text: str, tts_model: str, stt_params: dict, api_key: s
         await ws.send_close_stream()
         await listen_task
 
-    return {
+    result = {
         "transcript": " ".join(segments),
         "segments": segments,
     }
+    if turns.pending:
+        # This is the sweep path that writes CSVs, so a silently short Flux
+        # transcript here becomes a data point someone later cites as a model
+        # result. It has to arrive labelled. Same cause as the browser's
+        # stream_notice; see _unfinished_turn_notice.
+        result["unfinalized_transcript"] = turns.pending
+        result["notice"] = _unfinished_turn_notice(turns.pending)["message"]
+    return result
 
 
 async def _stt_streaming_raw(text: str, tts_model: str, stt_params: dict, api_key: str) -> dict:
@@ -1046,7 +1058,49 @@ def _transcript_event(msg) -> dict | None:
     }
 
 
-def _stream_message_handler(sid: str):
+def _flux_error_message(d: dict) -> str:
+    """Human-readable text for a Flux in-band failure.
+
+    ListenV2FatalError carries `code` and `description`. ListenV2ConfigureFailure
+    carries NEITHER — its only fields are type, request_id and sequence_id — so
+    saying so beats dumping the raw JSON and leaving the reader to notice there
+    is nothing in it.
+    """
+    kind = d.get("type")
+    description = d.get("description") or d.get("message")
+    code = d.get("code")
+    if description:
+        return f"Deepgram {kind}: {description}" + (f" ({code})" if code else "")
+    if kind == "ConfigureFailure":
+        return (
+            "Deepgram rejected the mid-stream Configure message. It reports no "
+            "reason for this — the message carries no description field — so "
+            "check the thresholds and keyterms being sent against their "
+            "documented ranges."
+        )
+    return f"Deepgram {kind}: {json_mod.dumps(d)[:500]}"
+
+
+class _TurnTracker:
+    """Remembers whether a Flux stream is sitting on an unfinalised turn.
+
+    Shared by the socket path and the TTS round trip so both notice a truncated
+    Flux result the same way. See _unfinished_turn_notice for why it matters:
+    without this, the transcript silently stops short of the audio.
+    """
+
+    def __init__(self) -> None:
+        self.pending: str | None = None
+
+    def observe(self, payload: dict) -> None:
+        if payload.get("flux_event") is None:
+            return  # v1 has no turns, so it can never be mid-turn
+        self.pending = (
+            None if payload["is_final"] else (payload["transcript"] or "").strip() or None
+        )
+
+
+def _stream_message_handler(sid: str, turns: "_TurnTracker"):
     """Build the EventType.MESSAGE callback for one session, either endpoint."""
 
     async def on_message(msg, **kwargs):
@@ -1066,26 +1120,16 @@ def _stream_message_handler(sid: str):
             return
 
         if kind in FLUX_ERROR_TYPES:
-            detail = (
-                d.get("description")
-                or d.get("message")
-                or json_mod.dumps(d)[:500]
-            )
             await sio.emit(
                 "stream_error",
-                {"message": _redact_credentials(f"Deepgram {kind}: {detail}")},
+                {"message": _redact_credentials(_flux_error_message(d))},
                 to=sid,
             )
             return
 
         payload = _transcript_event(msg)
         if payload is not None:
-            if payload.get("flux_event") is not None and sid in _sessions:
-                # Remember whether the stream is sitting mid-turn. See
-                # _unfinished_turn_notice for why that has to be reported.
-                _sessions[sid]["pending_turn"] = (
-                    None if payload["is_final"] else (payload["transcript"] or "").strip() or None
-                )
+            turns.observe(payload)
             await sio.emit("transcription_update", payload, to=sid)
 
     return on_message
@@ -1142,18 +1186,24 @@ CHUNK_SIZE = 4096
 KEEP_ALIVE_SECONDS = 8
 
 
-def _start_keep_alive(sid: str, ws, stop_event: asyncio.Event):
-    """Keep an idle v1 stream open. Returns None when the endpoint has no such message.
+def _start_keep_alive(sid: str, ws, stop_event: asyncio.Event, flux: bool):
+    """Keep an idle v1 stream open. Returns None on Flux, which has no KeepAlive.
 
-    /v2/listen has exactly two control messages, Configure and CloseStream —
-    there is no KeepAlive in the Flux docs and no send_keep_alive on the v2
-    socket client, so calling it there would raise AttributeError and kill the
-    stream eight seconds in.
+    /v2/listen has exactly TWO control messages, Configure and CloseStream. There
+    is no KeepAlive anywhere in the Flux docs, and the v2 socket client has no
+    send_keep_alive at all, so the v1 loop would kill a Flux stream with an
+    AttributeError eight seconds in.
+
+    DO NOT relax this to `hasattr(ws, "send_keep_alive")`. The constraint is
+    that the ENDPOINT has no such control message, not that this SDK build
+    happens not to expose the method; a later regeneration could add the method
+    and the hasattr form would silently start sending something /v2/listen never
+    agreed to accept.
 
     Flux does not need one from this app anyway: the only driver that can idle
     is the mic, and MediaRecorder keeps emitting frames through silence.
     """
-    if not hasattr(ws, "send_keep_alive"):
+    if flux:
         return None
 
     async def loop():
@@ -1192,6 +1242,7 @@ async def _run_stream(sid: str, params: dict, drive) -> None:
 
     dg = AsyncDeepgramClient(api_key=os.getenv("DEEPGRAM_API_KEY", ""))
     sdk_kwargs = _params_to_sdk_kwargs(params)
+    turns = _TurnTracker()
 
     try:
         async with _connect_stream(dg, sdk_kwargs) as ws:
@@ -1199,14 +1250,14 @@ async def _run_stream(sid: str, params: dict, drive) -> None:
             if sid in _sessions:
                 _sessions[sid]["ws"] = ws
 
-            ws.on(EventType.MESSAGE, _stream_message_handler(sid))
+            ws.on(EventType.MESSAGE, _stream_message_handler(sid, turns))
             listen_task = asyncio.create_task(ws.start_listening())
 
             # Emit stream_started immediately — don't gate on Metadata arrival
             await sio.emit("stream_started", {"request_id": None}, to=sid)
 
             try:
-                await drive(ws)
+                await drive(ws, is_flux_model(sdk_kwargs.get("model")))
             finally:
                 # Graceful shutdown: CloseStream, then wait for Deepgram to
                 # flush its final results. In a finally because a stream that
@@ -1225,9 +1276,8 @@ async def _run_stream(sid: str, params: dict, drive) -> None:
         await sio.emit("stream_error", {"message": _clean_error(e)}, to=sid)
     finally:
         session = _sessions.get(sid) or {}
-        pending = session.get("pending_turn")
-        if pending:
-            await sio.emit("stream_notice", _unfinished_turn_notice(pending), to=sid)
+        if turns.pending:
+            await sio.emit("stream_notice", _unfinished_turn_notice(turns.pending), to=sid)
         await sio.emit("stream_finished", {"request_id": session.get("request_id")}, to=sid)
         _sessions.pop(sid, None)
         logger.info("[%s] stream finished, session cleaned up", sid)
@@ -1236,8 +1286,8 @@ async def _run_stream(sid: str, params: dict, drive) -> None:
 async def streaming_task(sid: str, params: dict, stop_event: asyncio.Event) -> None:
     """Microphone streaming. Audio arrives via on_audio_stream, so this only waits."""
 
-    async def drive(ws):
-        ka_task = _start_keep_alive(sid, ws, stop_event)
+    async def drive(ws, flux):
+        ka_task = _start_keep_alive(sid, ws, stop_event, flux)
         try:
             # Wait for stop signal from on_toggle_transcription(stop) or
             # disconnect(). Anonymous streams also stop on a wall-clock cap:
@@ -1270,7 +1320,7 @@ async def file_streaming_task(
     """Streams an uploaded file to Deepgram over WebSocket, paced at 1x."""
     file_path = TEMP_DIR / filename
 
-    async def drive(ws):
+    async def drive(ws, flux):
         # Sleep between chunks so Deepgram receives audio at real-time speed,
         # keeping transcripts in sync with playback.
         try:
