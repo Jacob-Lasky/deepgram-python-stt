@@ -22,7 +22,7 @@ from deepgram import AsyncDeepgramClient
 from deepgram.environment import DeepgramClientEnvironment
 from websockets.asyncio.server import serve
 
-from app import _params_to_sdk_kwargs
+from app import _connect_stream, _params_to_sdk_kwargs
 
 
 def _local_environment(port: int) -> DeepgramClientEnvironment:
@@ -45,7 +45,12 @@ def _local_environment(port: int) -> DeepgramClientEnvironment:
 
 
 async def _handshake_path(params: dict) -> str:
-    """Connect the SDK to a local WS server; return the path it requested."""
+    """Connect the SDK to a local WS server; return the path it requested.
+
+    Routes through _connect_stream, the same dispatcher the app uses, so the
+    endpoint choice (v1 vs Flux's v2) is part of what these tests assert rather
+    than something they assume.
+    """
     seen: list[str] = []
 
     async def handler(ws):
@@ -59,7 +64,7 @@ async def _handshake_path(params: dict) -> str:
             environment=_local_environment(port),
         )
         try:
-            async with dg.listen.v1.connect(**_params_to_sdk_kwargs(params)):
+            async with _connect_stream(dg, _params_to_sdk_kwargs(params)):
                 pass
         except TypeError:
             # DO NOT swallow this. A TypeError from connect() IS the reported
@@ -178,6 +183,230 @@ async def test_base_url_is_never_forwarded_to_deepgram():
     would leak internal endpoint names into Deepgram's request logs."""
     path = await _handshake_path({"model": "nova-3", "base_url": "api.deepgram.com"})
     assert "base_url" not in [k for k, _ in _pairs(path)]
+
+
+# --- Flux / /v2/listen ---------------------------------------------------
+#
+# Everything below is measured behaviour, not documentation. /v2/listen accepts
+# a small closed set of params and answers ANY deviation with the same opaque
+# line — "400 Unexpected error when initializing websocket connection" — which
+# names no parameter. So a regression that starts forwarding a v1 param to Flux
+# does not produce a diagnosable failure in production; it produces a stream
+# that will not start, for no stated reason. These tests are the early warning.
+
+
+def _path_and_pairs(path: str) -> tuple[str, list[tuple[str, str]]]:
+    from urllib.parse import urlsplit
+
+    return urlsplit(path).path, _pairs(path)
+
+
+@pytest.mark.asyncio
+async def test_flux_model_goes_to_the_v2_endpoint():
+    """A Flux model must change the ENDPOINT, not just the model param.
+
+    On /v1/listen a flux model is a 400 (V2_MODEL_ON_V1_LISTEN_ENDPOINT), so
+    getting this wrong breaks Flux completely rather than subtly.
+    """
+    endpoint, pairs = _path_and_pairs(await _handshake_path({"model": "flux-general-en"}))
+    assert endpoint == "/v2/listen"
+    assert ("model", "flux-general-en") in pairs
+
+
+@pytest.mark.asyncio
+async def test_non_flux_models_stay_on_v1():
+    endpoint, _ = _path_and_pairs(await _handshake_path({"model": "nova-3"}))
+    assert endpoint == "/v1/listen"
+
+
+@pytest.mark.asyncio
+async def test_flux_end_of_turn_params_reach_the_wire():
+    """The three knobs that are the entire reason to choose Flux."""
+    pairs = _pairs(await _handshake_path({
+        "model": "flux-general-en",
+        "eot_threshold": 0.8,
+        "eager_eot_threshold": 0.4,
+        "eot_timeout_ms": 7000,
+    }))
+    assert ("eot_threshold", "0.8") in pairs
+    assert ("eager_eot_threshold", "0.4") in pairs
+    assert ("eot_timeout_ms", "7000") in pairs
+
+
+@pytest.mark.asyncio
+async def test_flux_strips_every_v1_only_param():
+    """The params panel always sends these. On Flux they must not reach the wire.
+
+    Each one was verified to 400 the real handshake on its own, so a single leak
+    here is a dead stream, not a degraded one.
+    """
+    pairs = _pairs(await _handshake_path({
+        "model": "flux-general-en",
+        "smart_format": True,
+        "punctuate": True,
+        "interim_results": True,
+        "vad_events": True,
+        "diarize": True,
+        "diarize_model": "v2",
+        "filler_words": True,
+        "utterance_end_ms": 1000,
+        "endpointing": 300,
+        "no_delay": True,
+        "multichannel": True,
+        "detect_entities": True,
+        "entity_prompt": "member ids",
+        "alternatives": 3,
+        "word_confidence": True,
+        "version": "latest",
+        "language": "en",
+        "utterances": True,
+        "paragraphs": True,
+        "dictation": True,
+        "search": "foo",
+        "replace": "a:b",
+    }))
+    leaked = sorted(k for k, _ in pairs if k != "model")
+    assert leaked == [], f"v1-only params reached /v2/listen: {leaked}"
+
+
+@pytest.mark.asyncio
+async def test_flux_keeps_the_params_v2_actually_accepts():
+    pairs = _pairs(await _handshake_path({
+        "model": "flux-general-multi",
+        "encoding": "linear16",
+        "sample_rate": 16000,
+        "keyterms": ["perineorrhaphy", "cerebral palsy"],
+        "numerals": True,
+        "profanity_filter": True,
+        "mip_opt_out": True,
+        "tags": "flux-probe",
+        "redact": ["numbers"],
+        "language_hint": "es",
+    }))
+    for expected in (
+        ("encoding", "linear16"),
+        ("sample_rate", "16000"),
+        ("keyterm", "perineorrhaphy"),
+        ("keyterm", "cerebral palsy"),
+        ("numerals", "true"),
+        ("profanity_filter", "true"),
+        ("mip_opt_out", "true"),
+        ("tag", "flux-probe"),
+        ("redact", "numbers"),
+        ("language_hint", "es"),
+    ):
+        assert expected in pairs, f"{expected[0]} never reached /v2/listen: {pairs}"
+
+
+@pytest.mark.asyncio
+async def test_flux_still_refuses_the_denied_params():
+    """The deny list is about safety, so the endpoint switch must not bypass it."""
+    keys = [k for k, _ in _pairs(await _handshake_path({
+        "model": "flux-general-en",
+        "callback": "https://evil.example/collect",
+        "keywords": "term:2",
+        "base_url": "api.deepgram.com",
+    }))]
+    for forbidden in ("callback", "keywords", "base_url"):
+        assert forbidden not in keys
+
+
+def test_flux_messages_arrive_as_dicts_not_sdk_models():
+    """Pins the SDK behaviour the Flux handler is built around.
+
+    V2SocketClientResponse is a Union containing a bare `Any`, so construct_type
+    matches that first and every /v2/listen message comes back as a plain dict.
+    isinstance(msg, ListenV2TurnInfo) is therefore always False, and a handler
+    written the way the v1 handler is written drops every turn in silence.
+
+    If a future SDK tightens the union this test fails, which is the point: that
+    is the moment to check the handler still works, not six months later when
+    someone notices Flux has been mute.
+    """
+    import typing
+
+    from deepgram.listen.v2.socket_client import V2SocketClientResponse
+
+    assert typing.Any in typing.get_args(V2SocketClientResponse), (
+        "the v2 response union no longer contains Any — messages may now arrive "
+        "as models, so re-check _as_dict and _transcript_event"
+    )
+
+
+def test_v1_messages_still_arrive_as_models():
+    """The other half of the asymmetry: v1's union has no `Any`.
+
+    _transcript_event branches on isinstance for v1 and on the dict shape for
+    Flux precisely because of this difference. If v1 ever grows an `Any` too,
+    the v1 branch stops firing and the transcript pane goes blank.
+    """
+    import typing
+
+    from deepgram.listen.v1.socket_client import V1SocketClientResponse
+
+    assert typing.Any not in typing.get_args(V1SocketClientResponse)
+
+
+def test_transcript_event_maps_a_flux_turn():
+    import app as app_mod
+
+    turn = {
+        "type": "TurnInfo",
+        "event": "Update",
+        "turn_index": 2,
+        "transcript": "Hi I need to cancel",
+        "end_of_turn_confidence": 0.13,
+        "audio_window_start": 2.56,
+        "audio_window_end": 4.0,
+        "words": [{"word": "Hi", "confidence": 1.0}],
+    }
+    payload = app_mod._transcript_event(turn)
+    assert payload["transcript"] == "Hi I need to cancel"
+    assert payload["is_final"] is False
+    assert payload["turn_index"] == 2
+    assert payload["end_of_turn_confidence"] == 0.13
+
+    payload = app_mod._transcript_event({**turn, "event": "EndOfTurn"})
+    assert payload["is_final"] is True
+
+
+def test_only_end_of_turn_is_final():
+    """EagerEndOfTurn carries the same transcript as the EndOfTurn that follows,
+    but a TurnResumed can land in between and extend the turn. Treating it as
+    final would commit a line the speaker had not finished."""
+    import app as app_mod
+
+    for event in ("Update", "StartOfTurn", "EagerEndOfTurn", "TurnResumed"):
+        payload = app_mod._transcript_event(
+            {"type": "TurnInfo", "event": event, "transcript": "hello"}
+        )
+        assert payload["is_final"] is False, event
+
+
+def test_transcript_event_ignores_non_transcript_messages():
+    import app as app_mod
+
+    for msg in (
+        {"type": "Connected", "request_id": "abc"},
+        {"type": "FatalError", "description": "boom"},
+        {"type": "Metadata"},
+    ):
+        assert app_mod._transcript_event(msg) is None
+
+
+def test_clean_error_redacts_credentials_when_parsing_fails():
+    """The leak this closed. _clean_error only stripped the Authorization header
+    as a side effect of extracting `status_code: N, body: ...`; an SDK error
+    without that tail fell through to `return str(e)` with the key intact, and
+    /v2/listen handshake failures are exactly that shape."""
+    import app as app_mod
+
+    e = Exception(
+        "ApiError: headers: {'Authorization': 'Token sk-live-secret'}: connection refused"
+    )
+    msg = app_mod._clean_error(e)
+    assert "sk-live-secret" not in msg
+    assert "<redacted>" in msg
 
 
 def test_clean_error_surfaces_deepgrams_reason_not_an_mdn_link():

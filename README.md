@@ -11,6 +11,7 @@ An interactive demo app for exploring Deepgram's real-time speech-to-text API. S
 ## Features
 
 - **Mic streaming** — Real-time transcription from your browser microphone using Deepgram's WebSocket API
+- **Flux (`/v2/listen`)** — Pick `flux-general-en` or `flux-general-multi` and the app switches endpoints, swaps the params panel for the small set v2 accepts, and renders the turn events (`StartOfTurn`, `EagerEndOfTurn`, `TurnResumed`, `EndOfTurn`) with their end-of-turn confidence
 - **File streaming** — Upload an audio file and stream it to Deepgram in real-time, with transcript synced to playback
 - **Batch transcription** — Submit a file or URL for single-shot transcription via the REST API
 - **TTS Test mode** — Type any text, generate speech via Deepgram TTS, and transcribe it back through the STT pipeline. Ideal for testing redaction, formatting, and model behavior without a microphone
@@ -238,6 +239,14 @@ Non-obvious things discovered during the Flask/gevent → FastAPI async migratio
 - **Deepgram boolean params must be lowercase strings** (`"true"`/`"false"`), not Python bools
 - **Never join a caller-supplied filename onto a directory** — Python's `Path` join *replaces* the base when the right side is absolute, so `TEMP_DIR / "/etc/passwd"` is `/etc/passwd`. Take `Path(name).name` and assert the resolved parent.
 - **Never interpolate a caller-supplied host into a URL that carries your API key** — it forwards the credential to whatever host they named.
+
+Flux (`/v2/listen`) specifically, all measured against production:
+
+- **v2 is strict where v1 is permissive** — v1 drops query params it does not recognise and transcribes anyway; v2 refuses the whole handshake for a single unknown one, with a body that reads only `Unexpected error when initializing websocket connection`. It names no parameter. That is why Flux params go through an allowlist (`FLUX_PARAMS`) rather than the mode denylist v1 uses, and why the app range-checks the end-of-turn knobs itself.
+- **Every Flux message arrives as a plain `dict`** — the SDK's `V2SocketClientResponse` union contains a bare `typing.Any`, which `construct_type` matches first, so `isinstance(msg, ListenV2TurnInfo)` is never true. The v1 union has no `Any` and does yield models. A handler copied from the v1 one drops every turn in silence.
+- **Flux has no `KeepAlive`** — only `Configure` and `CloseStream`. The v2 socket client has no `send_keep_alive`, so a keep-alive loop copied from v1 kills the stream with an `AttributeError` eight seconds in.
+- **A turn ends on silence in the AUDIO, not on wall clock** — and `CloseStream` flushes turns that already ended rather than forcing the open one shut. Cut a clip tight to the last syllable and the final turn never arrives: same 19-word clip, 8 runs each, 8/8 complete with a second of trailing silence and 0/8 without. The app detects this and says so instead of showing a short transcript with no explanation.
+- **The docs are wrong about two things** — `/docs/flux/configuration` gives `eot_timeout_ms` a max of 10000 (the real ceiling is 60000, per the quickstart), and the Flux feature-overview lists `version` as supported (it is a 400). `language_hint` is in the SDK's `connect()` signature unconditionally but is a 400 on `flux-general-en`.
 
 ---
 

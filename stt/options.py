@@ -8,6 +8,87 @@ class Mode(str, Enum):
     BOTH = "both"
 
 
+# --- Flux (/v2/listen) ---------------------------------------------------
+#
+# Flux is a DIFFERENT ENDPOINT, not another model on /v1/listen. Everything
+# below exists because the two endpoints disagree about what a parameter is.
+#
+# /v1/listen is permissive: it drops query params it does not recognise and
+# transcribes anyway, which is why so much of this file is about noticing
+# silent no-ops. /v2/listen is the opposite — it is STRICT. One unrecognised
+# param and the whole handshake fails:
+#
+#   400 Unexpected error when initializing websocket connection.
+#
+# and that string is the entire body. It does not name the parameter, the
+# value, or the reason. Measured against production on 2026-07-25: every one of
+# smart_format, punctuate, interim_results, diarize, filler_words,
+# utterance_end_ms, endpointing, keywords, callback, entity_prompt, version and
+# an invented `totally_made_up` killed the connection with that same message.
+#
+# So the gate for Flux is an ALLOWLIST, not the denylist used for v1. The params
+# panel always sends a pile of v1 fields; forwarding any of them means the
+# stream never starts, and the user is told nothing useful about why.
+FLUX_MODEL_PREFIX = "flux-"
+
+
+def is_flux_model(model) -> bool:
+    """True for the Flux family, which must go to /v2/listen instead of /v1."""
+    return isinstance(model, str) and model.startswith(FLUX_MODEL_PREFIX)
+
+
+# Params /v2/listen accepts. Verified by handshaking each one against
+# production rather than read off a page, because both available sources are
+# wrong in a direction that matters:
+#   - The docs' Flux feature-overview table lists `version` as "All available".
+#     It is not: version=latest is a 400.
+#   - The SDK's connect() names `language_hint` unconditionally, but it is a 400
+#     on flux-general-en. See FLUX_MULTILINGUAL_ONLY below.
+# DO NOT add to this set from either source alone. Handshake it first.
+FLUX_PARAMS = {
+    "model",
+    "encoding",
+    "sample_rate",
+    "eot_threshold",
+    "eager_eot_threshold",
+    "eot_timeout_ms",
+    "keyterm",
+    "language_hint",
+    "profanity_filter",
+    "numerals",
+    "redact",
+    "mip_opt_out",
+    "tag",
+}
+
+# Accepted by flux-general-multi ONLY. On flux-general-en these 400 the
+# handshake.
+#
+# These are REPORTED by flux_validation_error, not stripped. The distinction
+# matters: the params stripped above are panel defaults the user never chose,
+# but a language hint is something they typed on purpose, and silently dropping
+# it would produce a run that looks like it applied and did not — the exact
+# failure this module exists to prevent.
+FLUX_MULTILINGUAL_ONLY = {"language_hint"}
+FLUX_MULTILINGUAL_MODEL = "flux-general-multi"
+
+# Flux only redacts numbers. `redact=pci`, valid on v1, is a 400 here.
+FLUX_REDACT_VALUES = {"numbers", "aggressive_numbers"}
+
+# Inclusive bounds, measured by bisecting each one against production. The
+# app validates against these BEFORE connecting, purely so the user gets a
+# message naming the parameter — Deepgram's own rejection does not.
+#
+# DO NOT trust the docs here either: /docs/flux/configuration documents
+# eot_timeout_ms as 500-10000, but 10001 through 60000 all connect fine and
+# 60001 is the first rejection. The quickstart page has the correct range.
+FLUX_RANGES = {
+    "eot_threshold": (0.5, 0.9),
+    "eager_eot_threshold": (0.3, 0.9),
+    "eot_timeout_ms": (500, 60000),
+}
+
+
 # Mode gating, taken from Deepgram's own docs capability matrix. Each STT feature
 # page carries machine-readable markers, e.g. filler-words.mdx has
 #   <Markdown src="/snippets/stt-batch-available.mdx" />
@@ -136,14 +217,21 @@ def clean_params(params: dict, mode: Mode) -> dict:
     and map UI-internal names to Deepgram wire names (see PARAM_ALIASES).
     Returns clean dict ready to send to Deepgram as query params.
     """
+    flux = is_flux_model(params.get("model"))
     result: dict = {}
     for key, value in params.items():
         wire = PARAM_ALIASES.get(key, key)
         if _is_blocked(key, wire):
             continue
-        if mode == Mode.STREAMING and wire in BATCH_ONLY:
+        if flux:
+            # Allowlist, not mode gating: see FLUX_PARAMS. A Flux request is
+            # bound for /v2/listen regardless of which of this app's modes the
+            # user is in, and one stray v1 param there is a dead handshake.
+            if wire not in FLUX_PARAMS:
+                continue
+        elif mode == Mode.STREAMING and wire in BATCH_ONLY:
             continue
-        if mode == Mode.BATCH and wire in STREAMING_ONLY:
+        elif mode == Mode.BATCH and wire in STREAMING_ONLY:
             continue
         # Skip falsy values (but not 0 for numeric params, not False for booleans that are explicitly set)
         if value is None or value == "" or value == [] or value == {}:
@@ -165,6 +253,11 @@ def clean_params(params: dict, mode: Mode) -> dict:
     # NOTE: Deepgram also has its own unrelated `extra` query param (arbitrary
     # metadata echoed back in the response). A non-dict `extra` is left alone
     # above and forwarded as that param; only a dict means "merge these".
+    #
+    # It skips the Flux allowlist too, and that is deliberate. On Flux an
+    # unknown param kills the handshake, so this is the one way to try a v2
+    # param before this module models it — which is what a diagnostic tool is
+    # for. The blast radius is a failed connect, and the user opted in.
     if "extra" in result and isinstance(result["extra"], dict):
         extra = result.pop("extra")
         for k, v in extra.items():
@@ -190,6 +283,71 @@ def clean_params(params: dict, mode: Mode) -> dict:
             result.pop(legacy, None)
 
     return result
+
+
+def flux_validation_error(params: dict) -> str | None:
+    """The reason /v2/listen is about to refuse this request, or None.
+
+    THE POINT OF THIS FUNCTION IS THE MESSAGE. Deepgram validates all of these
+    itself and rejects the handshake, but the entire body it returns is
+
+        400 Unexpected error when initializing websocket connection.
+
+    with no parameter name, no value, and no reason. In a tool whose only job is
+    to explain what Deepgram did with your parameters, forwarding that is a
+    non-answer. So the checks below are duplicated deliberately: not to protect
+    Deepgram, but to say WHICH knob is wrong.
+
+    DO NOT convert these into silent strips. A user who set eot_threshold=0.95
+    needs to be told 0.9 is the ceiling; a run that quietly used 0.7 instead
+    looks like evidence about a threshold that was never applied.
+
+    Only checks Flux; returns None for every other model.
+    """
+    if not is_flux_model(params.get("model")):
+        return None
+
+    for name, (low, high) in FLUX_RANGES.items():
+        raw = params.get(name)
+        if raw is None or raw == "":
+            continue
+        try:
+            value = float(raw)
+        except (TypeError, ValueError):
+            return f"{name} must be a number between {low} and {high} (got {raw!r})."
+        if not (low <= value <= high):
+            return f"{name} must be between {low} and {high} (got {raw})."
+
+    eager = params.get("eager_eot_threshold")
+    eot = params.get("eot_threshold")
+    if eager not in (None, "") and eot not in (None, ""):
+        if float(eager) > float(eot):
+            return (
+                f"eager_eot_threshold ({eager}) must be less than or equal to "
+                f"eot_threshold ({eot}). Eager end-of-turn fires before the real "
+                "one, so a higher threshold could never trigger first."
+            )
+
+    redact = params.get("redact")
+    if redact:
+        values = redact if isinstance(redact, list) else [redact]
+        bad = [v for v in values if v not in FLUX_REDACT_VALUES]
+        if bad:
+            return (
+                f"Flux only redacts numbers. {', '.join(map(str, bad))} "
+                f"{'is' if len(bad) == 1 else 'are'} not accepted; use "
+                f"{' or '.join(sorted(FLUX_REDACT_VALUES))}."
+            )
+
+    if params.get("model") != FLUX_MULTILINGUAL_MODEL:
+        for name in sorted(FLUX_MULTILINGUAL_ONLY):
+            if params.get(name):
+                return (
+                    f"{name} requires model={FLUX_MULTILINGUAL_MODEL}. "
+                    f"{params.get('model')} is English-only and rejects it."
+                )
+
+    return None
 
 
 def serialize_params(params: dict, mode: Mode) -> dict:

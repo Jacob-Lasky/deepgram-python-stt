@@ -201,8 +201,33 @@ function appData() {
     _toastTimer: null,
 
     // Section open states
+    // Parameter gating rules, fetched from /api/param-gating so stt/options.py
+    // stays the only place they are written down. These defaults are EMPTY on
+    // purpose: they are not a second copy waiting to drift, they are the
+    // fail-open state for the moment before the fetch lands. The server gates
+    // authoritatively either way, so the worst case is the URL preview briefly
+    // showing a param the server will strip.
+    gatingLoaded: false,
+    gating: {
+      streaming_only: [],
+      batch_only: [],
+      internal: [],
+      denied: [],
+      aliases: {},
+      repeatable: [],
+      zero_means_unset: [],
+      flux: {
+        params: [],
+        multilingual_only: [],
+        multilingual_model: 'flux-general-multi',
+        ranges: {},
+        redact_values: [],
+      },
+    },
+
     sections: {
       core: true,
+      flux: false,
       audio: false,
       formatting: false,
       features: false,
@@ -326,6 +351,13 @@ function appData() {
       mip_opt_out: false,
       alternatives: 0,
       word_confidence: false,
+      // Flux (/v2/listen) end-of-turn detection. Strings, not numbers, because
+      // '' is the only way to express "leave it at Deepgram's default" — 0 is
+      // out of range for all three and would be sent as a real value.
+      eot_threshold: '',
+      eager_eot_threshold: '',
+      eot_timeout_ms: '',
+      language_hint: '',
       extra_json: '',
     },
 
@@ -335,6 +367,7 @@ function appData() {
       // handshake, and a socket opened without it is refused at connect.
       this._loadToken();
       this.setupSocket();
+      this._loadGating();
 
       // Watch params and update URL (debounced)
       this._urlUpdateTimer = null;
@@ -358,6 +391,118 @@ function appData() {
       });
 
       this.refreshUrl();
+    },
+
+    // ---- Parameter gating ----
+    async _loadGating() {
+      try {
+        const resp = await fetch('/api/param-gating');
+        if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+        this.gating = await resp.json();
+        this.gatingLoaded = true;
+        this.refreshUrl();
+      } catch (err) {
+        // Fail open rather than fall back to a hardcoded copy: the server
+        // applies the real gate, and a stale duplicate here is the bug this
+        // endpoint exists to remove.
+        console.warn('[DG] param gating unavailable, URL preview may show params the server strips:', err);
+      }
+    },
+
+    // Should the panel offer this control at all? False when the server would
+    // strip it anyway — wrong mode, wrong endpoint, or on the deny list.
+    //
+    // A control that cannot affect the request is worse than a missing one: it
+    // reads as evidence that the feature was tested. `callback` was the clearest
+    // case, a field the server has always refused to forward because it is a
+    // data-exfil primitive, sitting in the panel looking functional.
+    showParam(key) {
+      return !this._isDropped(key, this.mode === 'batch' ? 'batch' : 'streaming');
+    },
+
+    // Which gated params live in which accordion. Layout, not gating rules —
+    // the rules themselves come from /api/param-gating and are not duplicated
+    // here. This exists so a section whose every control is hidden collapses
+    // instead of rendering a header over nothing, which is what "Features"
+    // did on Flux.
+    sectionParams: {
+      core: ['model'],
+      audio: ['sample_rate', 'channels', 'encoding', 'multichannel'],
+      formatting: ['smart_format', 'punctuate', 'numerals', 'filler_words',
+                   'dictation', 'profanity_filter', 'word_confidence'],
+      features: ['diarize', 'diarize_model', 'detect_entities', 'utterances',
+                 'paragraphs'],
+      redaction: ['redact'],
+      prompting: ['keyterms', 'entity_prompt', 'search', 'replace'],
+      intelligence: ['topics', 'intents', 'sentiment'],
+      streaming: ['interim_results', 'vad_events', 'endpointing',
+                  'utterance_end_ms', 'no_delay'],
+      advanced: ['version', 'alternatives', 'tags', 'mip_opt_out'],
+    },
+
+    // Redaction groups that still have at least one selectable option. On Flux
+    // only the two number types survive, so PII/PHI/Other would otherwise render
+    // as bare headings over nothing.
+    redactGroups() {
+      return ['Groups', 'PII', 'PHI', 'Other'].filter(
+        g => this.redactOptions.some(o => o.group === g && this.redactAllowed(o.value))
+      );
+    },
+
+    sectionVisible(name) {
+      const keys = this.sectionParams[name];
+      if (!keys) return true;
+      return keys.some(k => this.showParam(k));
+    },
+
+    // Flux redacts numbers and nothing else — `redact=pci` is valid on v1 and a
+    // 400 at the v2 handshake. Offering the other thirty types on Flux is
+    // offering a broken stream.
+    redactAllowed(value) {
+      if (!this.isFlux) return true;
+      const allowed = this.gating.flux.redact_values || [];
+      return !allowed.length || allowed.includes(value);
+    },
+
+    // Flux is a different endpoint (/v2/listen), not another model on v1, so
+    // this drives the URL, the params panel, and what gets sent.
+    get isFlux() {
+      return (this.params.model || '').startsWith('flux-');
+    },
+
+    get isFluxMultilingual() {
+      return this.params.model === this.gating.flux.multilingual_model;
+    },
+
+    // Mirrors stt/options.py flux_validation_error: Deepgram rejects all of
+    // these with "Unexpected error when initializing websocket connection",
+    // which names nothing, so the panel says which knob is wrong before the
+    // request is ever made.
+    get fluxWarning() {
+      if (!this.isFlux) return '';
+      const p = this.params;
+      for (const [name, [low, high]] of Object.entries(this.gating.flux.ranges || {})) {
+        const raw = p[name];
+        if (raw === '' || raw === null || raw === undefined) continue;
+        const value = Number(raw);
+        if (Number.isNaN(value)) return `${name} must be a number between ${low} and ${high}.`;
+        if (value < low || value > high) return `${name} must be between ${low} and ${high} (got ${raw}).`;
+      }
+      if (p.eager_eot_threshold !== '' && p.eot_threshold !== '' &&
+          Number(p.eager_eot_threshold) > Number(p.eot_threshold)) {
+        return `eager_eot_threshold (${p.eager_eot_threshold}) must be less than or equal to eot_threshold (${p.eot_threshold}).`;
+      }
+      const allowed = this.gating.flux.redact_values || [];
+      const badRedact = (p.redact || []).filter(v => allowed.length && !allowed.includes(v));
+      if (badRedact.length) {
+        return `Flux only redacts numbers. Unset ${badRedact.join(', ')}.`;
+      }
+      if (!this.isFluxMultilingual) {
+        for (const name of (this.gating.flux.multilingual_only || [])) {
+          if (p[name]) return `${name} requires model=${this.gating.flux.multilingual_model}.`;
+        }
+      }
+      return '';
     },
 
     // ---- Transcript helpers ----
@@ -509,6 +654,27 @@ function appData() {
         this.responses.push({ type: 'error', data: { message: msg }, timestamp: new Date().toLocaleTimeString(), preview: msg, open: true });
         this.rightTab = 'responses';
         this.$nextTick(() => { const el = this.$refs.responsesList; if (el) el.scrollTop = el.scrollHeight; });
+      });
+
+      // Not an error: the request succeeded, but something about the result
+      // needs explaining. Today that is Flux ending mid-turn, where the
+      // transcript legitimately stops short of the audio.
+      this.socket.on('stream_notice', (data) => {
+        this.showToast(data.summary || data.message, 'warning');
+        this.responses.push({
+          type: 'notice',
+          data,
+          timestamp: new Date().toLocaleTimeString(),
+          preview: data.message,
+          open: true,
+        });
+        if (data.unfinalized_transcript) {
+          this._logDebug('unfinalized', data.unfinalized_transcript);
+        }
+        this.$nextTick(() => {
+          const el = this.$refs.responsesList;
+          if (el) el.scrollTop = el.scrollHeight;
+        });
       });
 
       this.socket.on('audio_settings', (data) => {
@@ -906,46 +1072,53 @@ function appData() {
 
       const isStreaming = this.mode !== 'batch';
       const scheme = isStreaming ? 'wss' : 'https';
+      // Flux lives on /v2/listen. Showing v1 here would hand someone a URL that
+      // 400s with V2_MODEL_ON_V1_LISTEN_ENDPOINT the moment they curl it.
+      const path = this.isFlux ? '/v2/listen' : '/v1/listen';
 
       const qp = this.buildQueryParams(isStreaming);
       const query = qp.length ? '?' + qp : '';
-      const full = `${scheme}://${base}/v1/listen${query}`;
 
       // Store without scheme prefix since scheme is shown separately in URL bar
-      this.urlDisplay = `${base}/v1/listen${query}`;
-      return full;
+      this.urlDisplay = `${base}${path}${query}`;
+      return `${scheme}://${this.urlDisplay}`;
     },
 
     buildQueryParams(isStreaming) {
       const p = this.params;
-
-      // Streaming-only: excluded from batch
-      const streamingOnly = ['interim_results', 'vad_events', 'endpointing', 'utterance_end_ms', 'no_delay'];
-      // Batch-only: excluded from streaming
-      const batchOnly = ['paragraphs', 'topics', 'intents', 'sentiment', 'utterances'];
-
+      const g = this.gating;
+      const mode = isStreaming ? 'streaming' : 'batch';
       const parts = [];
 
-      const skip = ['base_url', 'extra_json', 'redact', 'keyterms'];
-      if (isStreaming) skip.push(...batchOnly);
-      else skip.push(...streamingOnly);
+      // The URL bar is meant to be copied into curl, so it has to spell the
+      // params the way the wire does: the UI's plural `keyterms` and `tags` are
+      // internal names, and Deepgram's are the singular ones.
+      const push = (key, val) => {
+        const wire = g.aliases[key] || key;
+        parts.push(`${encodeURIComponent(wire)}=${encodeURIComponent(val)}`);
+      };
+
+      const isEmpty = (key, val) => {
+        if (val === '' || val === false || val === null || val === undefined) return true;
+        // 0 is a real value for most numeric params (endpointing=0 disables
+        // endpointing); it means "unset" only for the few the server says so.
+        return val === 0 && g.zero_means_unset.includes(g.aliases[key] || key);
+      };
 
       for (const [key, val] of Object.entries(p)) {
-        if (skip.includes(key)) continue;
-        if (key === 'redact' || key === 'keyterms') continue;
-        if (val === '' || val === false || val === 0 || val === null || val === undefined) continue;
-        if (key === 'alternatives' && val === 0) continue;
-        parts.push(`${encodeURIComponent(key)}=${encodeURIComponent(val)}`);
+        if (key === 'base_url' || key === 'extra_json') continue;
+        if (Array.isArray(val)) continue;  // repeated below, one part per value
+        if (this._isDropped(key, mode)) continue;
+        if (isEmpty(key, val)) continue;
+        push(key, val);
       }
 
-      // Array params: redact
-      for (const v of (p.redact || [])) {
-        parts.push(`redact=${encodeURIComponent(v)}`);
-      }
-
-      // Keyterms
-      for (const term of (p.keyterms || [])) {
-        if (term.trim()) parts.push(`keyterm=${encodeURIComponent(term.trim())}`);
+      for (const key of ['redact', 'keyterms']) {
+        if (this._isDropped(key, mode)) continue;
+        for (const v of (p[key] || [])) {
+          const term = String(v).trim();
+          if (term) push(key, term);
+        }
       }
 
       // extra_json merge
@@ -1116,22 +1289,37 @@ function appData() {
     },
 
     // ---- getCleanParams ----
+    // True when a param would be dropped before it reaches Deepgram, by the
+    // same rules stt/options.py applies. Used by both getCleanParams and the
+    // URL preview so the two cannot disagree about what is being sent.
+    _isDropped(key, mode) {
+      // Before the fetch lands every list is empty, and an empty Flux allowlist
+      // would mean "drop everything" — the panel would render with no controls
+      // and the URL bar with no params. Not gating until the rules are known is
+      // the only safe reading of "we do not know yet"; the server gates for real
+      // regardless.
+      if (!this.gatingLoaded) return false;
+      const g = this.gating;
+      const wire = g.aliases[key] || key;
+      if (g.internal.includes(wire) || g.denied.includes(wire)) return true;
+      if (this.isFlux) return !g.flux.params.includes(wire);
+      if (mode === 'streaming') return g.batch_only.includes(wire);
+      return g.streaming_only.includes(wire);
+    },
+
     getCleanParams(mode) {
       const p = this.params;
-      const isStreaming = mode === 'streaming';
-
-      const streamingOnly = ['interim_results', 'vad_events', 'endpointing', 'utterance_end_ms', 'no_delay'];
-      const batchOnly = ['paragraphs', 'topics', 'intents', 'sentiment', 'utterances'];
 
       const out = {};
 
       for (const [key, val] of Object.entries(p)) {
         if (key === 'base_url' || key === 'extra_json') continue;
-        if (isStreaming && batchOnly.includes(key)) continue;
-        if (!isStreaming && streamingOnly.includes(key)) continue;
+        if (this._isDropped(key, mode)) continue;
 
         if (val === '' || val === false || val === null || val === undefined) continue;
-        if (typeof val === 'number' && val === 0) continue;
+        // Same rule as the URL preview: 0 only means "unset" for the params the
+        // server nominates. endpointing=0 is a real setting, not a blank field.
+        if (val === 0 && this.gating.zero_means_unset.includes(this.gating.aliases[key] || key)) continue;
 
         if (key === 'redact' && Array.isArray(val) && val.length === 0) continue;
         if (key === 'keyterms' && Array.isArray(val) && val.length === 0) continue;

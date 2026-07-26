@@ -15,6 +15,9 @@ Usage:
     uv run python scripts/probe_ui.py --expect-removed Keywords --expect-present Keyterms
     uv run python scripts/probe_ui.py --mode streaming \
         --expect-absent "Filler Words" Utterances Paragraphs
+    uv run python scripts/probe_ui.py --model flux-general-en \
+        --expect-present eot_threshold --expect-absent "Smart Format" \
+        --expect-url-contains /v2/listen
 
 Exits non-zero when an expectation is unmet, so it works as a gate rather than
 just a screenshot printer.
@@ -46,6 +49,9 @@ async def probe(
     expect_absent: list[str],
     expect_removed: list[str],
     mode: str | None,
+    model: str | None,
+    expect_url_contains: list[str],
+    expect_url_absent: list[str],
 ) -> int:
     ARTIFACTS.mkdir(exist_ok=True)
     failures: list[str] = []
@@ -78,23 +84,34 @@ async def probe(
         # mode-gated (batch-only features are hidden while streaming), so --mode
         # picks which surface is being asserted.
         await page.evaluate(
-            """(m) => {
+            """({m, model}) => {
             const d = Alpine.$data(document.querySelector('[x-data]'));
             if (m) d.mode = m;
+            // Flux gating is driven by the MODEL, not the mode, so a probe that
+            // could only set the mode could not see the Flux surface at all.
+            if (model) d.params.model = model;
             Object.keys(d.sections || {}).forEach(k => d.sections[k] = true);
         }""",
-            mode,
+            {"m": mode, "model": model},
         )
-        await page.wait_for_timeout(700)
+        await page.wait_for_timeout(900)
         if mode:
             print(f"mode: {mode}")
+        if model:
+            print(f"model: {model}")
 
-        # VISIBLE labels only, and both label flavours (field rows use
-        # .field-label, checkboxes use <label for>). A mode-gated control is
-        # still in the DOM with x-show false, so presence is not the question —
-        # whether the user can see it is.
+        # VISIBLE labels only, and every label flavour the panel uses: field rows
+        # (.field-label), checkboxes (<label for>) and switches (.toggle-label).
+        # A mode-gated control is still in the DOM with x-show false, so presence
+        # is not the question — whether the user can see it is.
+        #
+        # DO NOT drop .toggle-label. It was missing, which made every switch —
+        # Interim Results, VAD Events, No Delay, Multichannel, MIP Opt Out —
+        # invisible to this harness, so --expect-absent on any of them passed
+        # without checking anything. A gate that cannot fail is not a gate.
         labels = await page.evaluate("""() => {
-            const seen = document.querySelectorAll('.field-label, .checkbox-item label');
+            const seen = document.querySelectorAll(
+                '.field-label, .checkbox-item label, .toggle-label');
             return [...seen]
                 .filter(e => e.offsetParent !== null)
                 .map(e => e.textContent.trim());
@@ -108,6 +125,23 @@ async def probe(
             "() => JSON.parse(JSON.stringify("
             "Alpine.$data(document.querySelector('[x-data]')).params))"
         )
+
+        # The URL bar is a headline feature — people copy it into curl — so what
+        # it displays is part of the contract, not decoration.
+        url_display = await page.evaluate(
+            "() => Alpine.$data(document.querySelector('[x-data]')).urlDisplay"
+        )
+        print(f"url bar: {url_display}")
+        for fragment in expect_url_contains:
+            if fragment not in (url_display or ""):
+                failures.append(f"url bar {url_display!r} does not contain {fragment!r}")
+        # Asserting on the URL rather than on a label is the unambiguous test for
+        # a stripped param: several controls share label text (the Core language
+        # field and the TTS voice-language picker are both "Language"), but only
+        # one thing can put language= on the wire.
+        for fragment in expect_url_absent:
+            if fragment in (url_display or ""):
+                failures.append(f"url bar {url_display!r} still contains {fragment!r}")
 
         print(f"fields rendered: {len(labels)}")
         print(json.dumps(sorted(labels), indent=1))
@@ -143,8 +177,11 @@ async def probe(
             if key in params:
                 failures.append(f"{key!r} is still in the live Alpine params state")
 
-        # Mode in the filename so a streaming run does not overwrite a batch one.
-        shot = ARTIFACTS / f"ui_{mode or 'default'}.png"
+        # Mode AND model in the filename so no run overwrites another: the two
+        # axes are independent (nova-3 renders differently in streaming vs
+        # batch, and flux differently again), and an overwritten artifact is a
+        # PR that shows the wrong evidence.
+        shot = ARTIFACTS / f"ui_{model or 'default'}_{mode or 'default'}.png"
         await page.screenshot(path=str(shot), full_page=True)
         print(f"\nartifact: {shot}")
         await browser.close()
@@ -174,9 +211,22 @@ def main() -> int:
         "--mode", default=None,
         help="set the app mode first (streaming|batch); some controls are mode-gated",
     )
+    ap.add_argument(
+        "--model", default=None,
+        help="set params.model first; Flux gating is model-driven, not mode-driven",
+    )
+    ap.add_argument(
+        "--expect-url-contains", nargs="*", default=[],
+        help="fragments the URL bar must display, e.g. /v2/listen",
+    )
+    ap.add_argument(
+        "--expect-url-absent", nargs="*", default=[],
+        help="fragments the URL bar must NOT display, e.g. smart_format",
+    )
     a = ap.parse_args()
     return asyncio.run(
-        probe(a.url, a.expect_present, a.expect_absent, a.expect_removed, a.mode)
+        probe(a.url, a.expect_present, a.expect_absent, a.expect_removed,
+              a.mode, a.model, a.expect_url_contains, a.expect_url_absent)
     )
 
 

@@ -330,3 +330,196 @@ def test_diarize_model_is_a_named_sdk_kwarg_not_passthrough():
     import app
     built = app._params_to_sdk_kwargs({"model": "nova-3", "extra": {"diarize_model": "latest"}})
     assert built.get("diarize_model") == "latest"
+
+
+# --- Flux (/v2/listen) ----------------------------------------------------
+
+
+def test_flux_strips_v1_only_params_by_allowlist():
+    """/v2/listen is strict: one unknown param and the handshake 400s.
+
+    The panel sends all of these on every request, so without the allowlist a
+    Flux stream never starts — and the failure is a bare "Unexpected error when
+    initializing websocket connection" that names nothing.
+    """
+    out = clean_params({
+        "model": "flux-general-en",
+        "smart_format": True,
+        "punctuate": True,
+        "interim_results": True,
+        "diarize": True,
+        "endpointing": 300,
+        "alternatives": 2,
+        "language": "en",
+        "version": "latest",
+    }, Mode.STREAMING)
+    assert out == {"model": "flux-general-en"}
+
+
+def test_flux_keeps_its_own_params():
+    out = clean_params({
+        "model": "flux-general-en",
+        "encoding": "linear16",
+        "sample_rate": 16000,
+        "eot_threshold": 0.8,
+        "eager_eot_threshold": 0.4,
+        "eot_timeout_ms": 7000,
+        "keyterms": ["cerebral palsy"],
+        "numerals": True,
+        "profanity_filter": True,
+        "redact": ["numbers"],
+        "mip_opt_out": True,
+        "tags": "probe",
+    }, Mode.STREAMING)
+    assert out["encoding"] == "linear16"
+    assert out["eot_threshold"] == 0.8
+    assert out["keyterm"] == ["cerebral palsy"]  # aliased, as on v1
+    assert out["tag"] == "probe"
+    assert out["redact"] == ["numbers"]
+
+
+def test_flux_allowlist_ignores_mode():
+    """A Flux request goes to /v2/listen whichever of this app's modes is
+    selected, so the v1 mode sets must not get a say. sample_rate is
+    STREAMING_ONLY on v1 and would be stripped in batch."""
+    out = clean_params(
+        {"model": "flux-general-en", "sample_rate": 16000}, Mode.BATCH
+    )
+    assert out["sample_rate"] == 16000
+
+
+def test_flux_still_honours_the_deny_list():
+    out = clean_params({
+        "model": "flux-general-en",
+        "callback": "https://evil.example/x",
+        "keywords": "term:2",
+        "base_url": "api.deepgram.com",
+    }, Mode.STREAMING)
+    assert out == {"model": "flux-general-en"}
+
+
+def test_non_flux_models_are_unaffected_by_the_allowlist():
+    out = clean_params(
+        {"model": "nova-3", "smart_format": True, "interim_results": True},
+        Mode.STREAMING,
+    )
+    assert out["smart_format"] is True
+    assert out["interim_results"] is True
+
+
+def test_is_flux_model_only_matches_the_family():
+    from stt.options import is_flux_model
+
+    assert is_flux_model("flux-general-en")
+    assert is_flux_model("flux-general-multi")
+    assert not is_flux_model("nova-3")
+    assert not is_flux_model("")
+    assert not is_flux_model(None)
+
+
+# --- Flux validation ------------------------------------------------------
+#
+# These exist for the MESSAGE. Deepgram enforces every one of them itself and
+# says only "Unexpected error when initializing websocket connection", so a
+# diagnostic tool that forwards that has answered nothing.
+
+
+def test_flux_validation_passes_a_good_config():
+    from stt.options import flux_validation_error
+
+    assert flux_validation_error({
+        "model": "flux-general-en",
+        "eot_threshold": 0.8,
+        "eager_eot_threshold": 0.4,
+        "eot_timeout_ms": 7000,
+        "redact": ["numbers"],
+    }) is None
+
+
+def test_flux_validation_ignores_non_flux_models():
+    from stt.options import flux_validation_error
+
+    assert flux_validation_error({"model": "nova-3", "eot_threshold": 99}) is None
+
+
+@pytest.mark.parametrize("name,value", [
+    ("eot_threshold", 0.49),
+    ("eot_threshold", 0.91),
+    ("eager_eot_threshold", 0.29),
+    ("eager_eot_threshold", 0.91),
+    ("eot_timeout_ms", 499),
+    ("eot_timeout_ms", 60001),
+])
+def test_flux_validation_catches_out_of_range(name, value):
+    """Bounds bisected against production, not read off the docs — which get
+    eot_timeout_ms wrong on /docs/flux/configuration (it says max 10000)."""
+    from stt.options import flux_validation_error
+
+    problem = flux_validation_error({"model": "flux-general-en", name: value})
+    assert problem is not None
+    assert name in problem
+
+
+@pytest.mark.parametrize("name,value", [
+    ("eot_threshold", 0.5),
+    ("eot_threshold", 0.9),
+    ("eager_eot_threshold", 0.3),
+    ("eot_timeout_ms", 500),
+    ("eot_timeout_ms", 60000),
+])
+def test_flux_validation_accepts_the_boundaries(name, value):
+    from stt.options import flux_validation_error
+
+    assert flux_validation_error({"model": "flux-general-en", name: value}) is None
+
+
+def test_flux_validation_catches_eager_above_eot():
+    from stt.options import flux_validation_error
+
+    problem = flux_validation_error({
+        "model": "flux-general-en",
+        "eager_eot_threshold": 0.9,
+        "eot_threshold": 0.5,
+    })
+    assert problem is not None
+    assert "eager_eot_threshold" in problem
+
+
+def test_flux_validation_allows_eager_equal_to_eot():
+    from stt.options import flux_validation_error
+
+    assert flux_validation_error({
+        "model": "flux-general-en",
+        "eager_eot_threshold": 0.7,
+        "eot_threshold": 0.7,
+    }) is None
+
+
+def test_flux_validation_rejects_non_number_thresholds():
+    from stt.options import flux_validation_error
+
+    problem = flux_validation_error({"model": "flux-general-en", "eot_threshold": "high"})
+    assert problem is not None and "eot_threshold" in problem
+
+
+def test_flux_validation_rejects_non_number_redactions():
+    """Flux redacts numbers only; redact=pci is valid on v1 and a 400 here."""
+    from stt.options import flux_validation_error
+
+    problem = flux_validation_error({"model": "flux-general-en", "redact": ["pci"]})
+    assert problem is not None
+    assert "pci" in problem
+
+
+def test_flux_validation_flags_language_hint_on_the_english_model():
+    """Reported, not stripped: the user typed it on purpose, and a run that
+    silently dropped it would look like evidence about a hint never applied."""
+    from stt.options import flux_validation_error
+
+    problem = flux_validation_error({"model": "flux-general-en", "language_hint": "es"})
+    assert problem is not None
+    assert "flux-general-multi" in problem
+
+    assert flux_validation_error({
+        "model": "flux-general-multi", "language_hint": "es"
+    }) is None

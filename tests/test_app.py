@@ -196,3 +196,208 @@ async def test_audio_stream_when_not_streaming_does_not_crash(sio_client):
     await sio_client.emit("audio_stream", b"\x00\x01\x02\x03\xff\xfe")
     await asyncio.sleep(0.1)
     assert sio_client.connected
+
+
+# --- /api/param-gating ----------------------------------------------------
+#
+# The browser used to keep its own copies of the mode lists and they had
+# drifted, so the URL bar advertised a request that was not the one being sent.
+# These tests are what stops that happening again: if options.py grows a rule
+# the endpoint does not carry, the frontend cannot see it.
+
+
+def test_param_gating_matches_options_module():
+    import asyncio
+
+    import app as app_mod
+    from stt.options import (
+        BATCH_ONLY, DENIED_PARAMS, FLUX_MULTILINGUAL_MODEL, FLUX_MULTILINGUAL_ONLY,
+        FLUX_PARAMS, FLUX_RANGES, FLUX_REDACT_VALUES, INTERNAL_PARAMS,
+        PARAM_ALIASES, REPEATABLE_PARAMS, STREAMING_ONLY, ZERO_MEANS_UNSET,
+    )
+
+    body = asyncio.run(app_mod.param_gating())
+    assert body["streaming_only"] == sorted(STREAMING_ONLY)
+    assert body["batch_only"] == sorted(BATCH_ONLY)
+    assert body["internal"] == sorted(INTERNAL_PARAMS)
+    assert body["denied"] == sorted(DENIED_PARAMS)
+    assert body["aliases"] == PARAM_ALIASES
+    assert body["repeatable"] == sorted(REPEATABLE_PARAMS)
+    assert body["zero_means_unset"] == sorted(ZERO_MEANS_UNSET)
+    assert body["flux"]["params"] == sorted(FLUX_PARAMS)
+    assert body["flux"]["multilingual_only"] == sorted(FLUX_MULTILINGUAL_ONLY)
+    assert body["flux"]["multilingual_model"] == FLUX_MULTILINGUAL_MODEL
+    assert body["flux"]["redact_values"] == sorted(FLUX_REDACT_VALUES)
+    assert body["flux"]["ranges"] == {k: list(v) for k, v in FLUX_RANGES.items()}
+
+
+def test_param_gating_is_open_to_anonymous_callers():
+    """The params panel has to render for the visitors this app demos to, and
+    the endpoint describes a public API surface rather than spending anything.
+    Asserting on the route's dependencies rather than on a response, because the
+    thing that would break this is someone adding _enforce_access to it."""
+    import app as app_mod
+
+    routes = [r for r in app_mod.fastapi_app.routes
+              if getattr(r, "path", None) == "/api/param-gating"]
+    assert routes, "/api/param-gating is not registered"
+    assert routes[0].dependencies == []
+
+
+def test_param_gating_is_json_serialisable_without_sets():
+    """Sets are not JSON. Returning one raises at response time, not import
+    time, so it would ship green and 500 in the browser."""
+    import asyncio
+    import json as json_mod
+
+    import app as app_mod
+
+    json_mod.dumps(asyncio.run(app_mod.param_gating()))
+
+
+def test_unfinished_turn_notice_names_the_cause_and_keeps_the_text():
+    import app as app_mod
+
+    notice = app_mod._unfinished_turn_notice("Actually, wait. Can you tell me a")
+    assert "eot_timeout_ms" in notice["message"]
+    assert "trailing silence" in notice["message"]
+    assert notice["unfinalized_transcript"] == "Actually, wait. Can you tell me a"
+    # The toast auto-dismisses, so it gets the short form.
+    assert len(notice["summary"]) < len(notice["message"])
+
+
+def test_turn_tracker_tracks_only_unfinalised_flux_turns():
+    """The notice must fire when a stream stops mid-turn and stay quiet
+    otherwise, so what sets and clears pending is the whole contract."""
+    import app as app_mod
+
+    turns = app_mod._TurnTracker()
+
+    def feed(event, transcript):
+        turns.observe(app_mod._transcript_event({
+            "type": "TurnInfo", "event": event, "transcript": transcript,
+            "turn_index": 0,
+        }))
+
+    feed("StartOfTurn", "Actually,")
+    assert turns.pending == "Actually,"
+
+    feed("Update", "Actually, wait")
+    assert turns.pending == "Actually, wait"
+
+    # EndOfTurn settles the turn: nothing is owed to the user any more.
+    feed("EndOfTurn", "Actually, wait.")
+    assert turns.pending is None
+
+    # An empty Update between turns must not resurrect the notice.
+    feed("Update", "")
+    assert turns.pending is None
+
+    # ...and a turn that reopens after a settled one is pending again.
+    feed("StartOfTurn", "One more thing")
+    assert turns.pending == "One more thing"
+
+
+def test_v1_results_never_set_a_pending_turn():
+    """v1 has no turns, so a v1 stream must never raise the Flux notice."""
+    import asyncio
+
+    import app as app_mod
+    from deepgram.listen.v1.types import ListenV1Results
+
+    sid = "test-pending-v1"
+    app_mod._sessions[sid] = {}
+    turns = app_mod._TurnTracker()
+    handler = app_mod._stream_message_handler(sid, turns)
+    # A real model, not a mock: the handler branches on isinstance, so a mock
+    # that is not one would pass this test by taking the wrong branch.
+    # model_construct skips validation — a valid Results needs a whole metadata
+    # tree this test does not care about, and inventing one would obscure what
+    # is being asserted.
+    # The SDK's model_construct builds nested fields from plain dicts.
+    msg = ListenV1Results.model_construct(
+        type="Results", start=0.0, is_final=False,
+        channel={"alternatives": [{"transcript": "hello", "confidence": 1.0, "words": []}]},
+    )
+    assert msg.channel.alternatives[0].transcript == "hello"
+    try:
+        asyncio.run(handler(msg))
+        assert turns.pending is None
+    finally:
+        app_mod._sessions.pop(sid, None)
+
+
+def test_flux_error_message_uses_code_and_description():
+    """ListenV2FatalError carries `code` and `description`; both belong in the
+    message, and neither should be dropped for a raw JSON dump."""
+    import app as app_mod
+
+    msg = app_mod._flux_error_message({
+        "type": "FatalError", "code": "AUDIO_DECODE", "description": "bad frame",
+    })
+    assert "bad frame" in msg and "AUDIO_DECODE" in msg and "{" not in msg
+
+
+def test_flux_configure_failure_says_there_is_no_reason():
+    """ListenV2ConfigureFailure has NO description field at all — only type,
+    request_id and sequence_id. Dumping that JSON tells the reader nothing and
+    looks like the app failed to parse it."""
+    import app as app_mod
+
+    msg = app_mod._flux_error_message({
+        "type": "ConfigureFailure", "request_id": "abc", "sequence_id": 4,
+    })
+    assert "no reason" in msg
+    assert "abc" not in msg  # not a raw dump
+
+
+def test_flux_error_message_is_redacted_before_it_leaves_the_server():
+    """The description comes from Deepgram, but this path also catches the raw
+    JSON fallback, so it goes through the same redaction as every other error."""
+    import app as app_mod
+
+    d = {"type": "FatalError", "description": "auth failed for Token sk-live-x"}
+    assert "sk-live-x" not in app_mod._redact_credentials(app_mod._flux_error_message(d))
+
+
+def test_keep_alive_is_refused_on_flux_even_if_the_sdk_grows_the_method():
+    """Gating on the endpoint, not on hasattr. /v2/listen has only Configure and
+    CloseStream; a later SDK regeneration that adds send_keep_alive must not make
+    this app start sending one."""
+    import asyncio
+
+    import app as app_mod
+
+    class WsWithKeepAlive:
+        async def send_keep_alive(self):
+            raise AssertionError("KeepAlive must never be sent on Flux")
+
+    async def check():
+        return app_mod._start_keep_alive(
+            "sid", WsWithKeepAlive(), asyncio.Event(), flux=True
+        )
+
+    assert asyncio.run(check()) is None
+
+
+def test_keep_alive_still_runs_on_v1():
+    import asyncio
+
+    import app as app_mod
+
+    class Ws:
+        async def send_keep_alive(self):
+            pass
+
+    async def check():
+        stop = asyncio.Event()
+        task = app_mod._start_keep_alive("sid", Ws(), stop, flux=False)
+        assert task is not None
+        stop.set()
+        task.cancel()
+        try:
+            await task
+        except asyncio.CancelledError:
+            pass
+
+    asyncio.run(check())

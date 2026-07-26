@@ -780,6 +780,7 @@
     }
     .toast.success { border-color: #13ef95; color: #13ef95; }
     .toast.error { border-color: #ef4444; color: #fca5a5; }
+    .toast.warning { border-color: #f59e0b; color: #fcd34d; }
 
     /* ---- Misc ---- */
     .text-muted { color: #6b7280; }
@@ -1205,7 +1206,7 @@
         </div>
 
         <!-- PARAM SECTION: Core -->
-        <div class="param-section">
+        <div class="param-section" x-show="sectionVisible('core')">
           <div class="param-section-header" @click="sections.core = !sections.core">
             <div class="param-section-title">
               <i class="fas fa-cog"></i> Core
@@ -1216,9 +1217,23 @@
             <div class="field-row">
               <div class="field">
                 <div class="field-label">Model</div>
-                <input class="field-input" x-model="params.model" placeholder="nova-3">
+                <!-- Free text with suggestions, not a select: this is a
+                     diagnostic tool and any model name a customer reports has
+                     to be typeable, including ones newer than this page. -->
+                <input class="field-input" x-model="params.model" placeholder="nova-3" list="model-suggestions">
+                <datalist id="model-suggestions">
+                  <option value="nova-3"></option>
+                  <option value="nova-3-medical"></option>
+                  <option value="nova-2"></option>
+                  <option value="flux-general-en"></option>
+                  <option value="flux-general-multi"></option>
+                </datalist>
+                <div class="field-hint" x-show="isFlux">
+                  Flux streams from <code>/v2/listen</code>. Batch mode and every
+                  v1-only parameter are unavailable, and the panel hides them.
+                </div>
               </div>
-              <div class="field">
+              <div class="field" x-show="showParam('language')">
                 <div class="field-label">Language</div>
                 <input class="field-input" x-model="params.language" placeholder="en">
               </div>
@@ -1230,8 +1245,49 @@
           </div>
         </div>
 
+        <!-- PARAM SECTION: Flux end-of-turn (only meaningful on /v2/listen) -->
+        <div class="param-section" x-show="isFlux">
+          <div class="param-section-header" @click="sections.flux = !sections.flux">
+            <div class="param-section-title">
+              <i class="fas fa-comments"></i> Flux End-of-Turn
+            </div>
+            <i class="fas fa-chevron-down param-section-chevron" :class="sections.flux && 'open'"></i>
+          </div>
+          <div x-show="sections.flux" class="param-section-body">
+            <div class="field-hint" x-show="fluxWarning" x-text="fluxWarning"
+                 style="color: var(--error, #e5484d); margin-bottom: 8px;"></div>
+            <div class="field-row">
+              <div class="field">
+                <div class="field-label">eot_threshold</div>
+                <input class="field-input" type="number" step="0.05" min="0.5" max="0.9"
+                       x-model="params.eot_threshold" placeholder="0.7">
+                <div class="field-hint">0.5-0.9. Confidence needed to end a turn. Higher is more certain, slower.</div>
+              </div>
+              <div class="field">
+                <div class="field-label">eager_eot_threshold</div>
+                <input class="field-input" type="number" step="0.05" min="0.3" max="0.9"
+                       x-model="params.eager_eot_threshold" placeholder="off">
+                <div class="field-hint">0.3-0.9, unset by default. Setting it enables <code>EagerEndOfTurn</code> and <code>TurnResumed</code>. Must be &le; eot_threshold.</div>
+              </div>
+            </div>
+            <div class="field">
+              <div class="field-label">eot_timeout_ms</div>
+              <input class="field-input" type="number" step="500" min="500" max="60000"
+                     x-model="params.eot_timeout_ms" placeholder="5000">
+              <div class="field-hint">500-60000. Silence that forces a turn to end regardless of confidence.</div>
+            </div>
+            <div class="field" x-show="isFluxMultilingual">
+              <div class="field-label">language_hint</div>
+              <input class="field-input" x-model="params.language_hint" placeholder="en">
+              <div class="field-hint">
+                <code>flux-general-multi</code> only. On <code>flux-general-en</code> it is rejected at the handshake.
+              </div>
+            </div>
+          </div>
+        </div>
+
         <!-- PARAM SECTION: Audio -->
-        <div class="param-section">
+        <div class="param-section" x-show="sectionVisible('audio')">
           <div class="param-section-header" @click="sections.audio = !sections.audio">
             <div class="param-section-title">
               <i class="fas fa-wave-square"></i> Audio
@@ -1240,16 +1296,16 @@
           </div>
           <div x-show="sections.audio" class="param-section-body">
             <div class="field-row">
-              <div class="field">
+              <div class="field" x-show="showParam('sample_rate')">
                 <div class="field-label">Sample Rate</div>
                 <input class="field-input" type="number" x-model.number="params.sample_rate" placeholder="16000">
               </div>
-              <div class="field">
+              <div class="field" x-show="showParam('channels')">
                 <div class="field-label">Channels</div>
                 <input class="field-input" type="number" min="1" x-model.number="params.channels" placeholder="1">
               </div>
             </div>
-            <div class="field">
+            <div class="field" x-show="showParam('encoding')">
               <div class="field-label">Encoding</div>
               <select class="field-select" x-model="params.encoding">
                 <option value="">Auto-detect</option>
@@ -1266,7 +1322,7 @@
                 <option value="g729">g729</option>
               </select>
             </div>
-            <div class="toggle-row">
+            <div class="toggle-row" x-show="showParam('multichannel')">
               <span class="toggle-label">Multichannel</span>
               <label class="toggle-switch">
                 <input type="checkbox" x-model="params.multichannel">
@@ -1277,7 +1333,7 @@
         </div>
 
         <!-- PARAM SECTION: Formatting -->
-        <div class="param-section">
+        <div class="param-section" x-show="sectionVisible('formatting')">
           <div class="param-section-header" @click="sections.formatting = !sections.formatting">
             <div class="param-section-title">
               <i class="fas fa-align-left"></i> Formatting
@@ -1286,15 +1342,15 @@
           </div>
           <div x-show="sections.formatting" class="param-section-body">
             <div class="checkbox-grid">
-              <div class="checkbox-item">
+              <div class="checkbox-item" x-show="showParam('smart_format')">
                 <input type="checkbox" id="smart_format" x-model="params.smart_format">
                 <label for="smart_format">Smart Format</label>
               </div>
-              <div class="checkbox-item">
+              <div class="checkbox-item" x-show="showParam('punctuate')">
                 <input type="checkbox" id="punctuate" x-model="params.punctuate">
                 <label for="punctuate">Punctuate</label>
               </div>
-              <div class="checkbox-item">
+              <div class="checkbox-item" x-show="showParam('numerals')">
                 <input type="checkbox" id="numerals" x-model="params.numerals">
                 <label for="numerals">Numerals</label>
               </div>
@@ -1302,19 +1358,19 @@
                    shown-and-ignored: Deepgram drops a stream-unavailable param
                    silently, so a checkbox that does nothing reads as a broken
                    feature. stt/options.py BATCH_ONLY strips it server-side. -->
-              <div class="checkbox-item" x-show="mode === 'batch'">
+              <div class="checkbox-item" x-show="showParam('filler_words')">
                 <input type="checkbox" id="filler_words" x-model="params.filler_words">
                 <label for="filler_words">Filler Words</label>
               </div>
-              <div class="checkbox-item">
+              <div class="checkbox-item" x-show="showParam('dictation')">
                 <input type="checkbox" id="dictation" x-model="params.dictation">
                 <label for="dictation">Dictation</label>
               </div>
-              <div class="checkbox-item">
+              <div class="checkbox-item" x-show="showParam('profanity_filter')">
                 <input type="checkbox" id="profanity_filter" x-model="params.profanity_filter">
                 <label for="profanity_filter">Profanity Filter</label>
               </div>
-              <div class="checkbox-item">
+              <div class="checkbox-item" x-show="showParam('word_confidence')">
                 <input type="checkbox" id="word_confidence" x-model="params.word_confidence">
                 <label for="word_confidence">Word Confidence</label>
               </div>
@@ -1323,7 +1379,7 @@
         </div>
 
         <!-- PARAM SECTION: Features -->
-        <div class="param-section">
+        <div class="param-section" x-show="sectionVisible('features')">
           <div class="param-section-header" @click="sections.features = !sections.features">
             <div class="param-section-title">
               <i class="fas fa-star"></i> Features
@@ -1336,23 +1392,23 @@
                    configs send and replicating those is a job this tool has.
                    Always v1. Clears diarize_model because Deepgram 400s on the
                    pair. -->
-              <div class="checkbox-item">
+              <div class="checkbox-item" x-show="showParam('diarize')">
                 <input type="checkbox" id="diarize" x-model="params.diarize"
                        @change="if (params.diarize) params.diarize_model = ''">
                 <label for="diarize" title="Deprecated; always selects the v1 diarizer">Diarize (v1, deprecated)</label>
               </div>
-              <div class="checkbox-item">
+              <div class="checkbox-item" x-show="showParam('detect_entities')">
                 <input type="checkbox" id="detect_entities" x-model="params.detect_entities">
                 <label for="detect_entities">Detect Entities</label>
               </div>
               <!-- Batch only (docs: stt-stream-unavailable), same reasoning as
                    Filler Words above: silently ignored on a stream, so hide it
                    rather than offer a control that cannot work. -->
-              <div class="checkbox-item" x-show="mode === 'batch'">
+              <div class="checkbox-item" x-show="showParam('utterances')">
                 <input type="checkbox" id="utterances" x-model="params.utterances">
                 <label for="utterances">Utterances</label>
               </div>
-              <div class="checkbox-item" x-show="mode === 'batch'">
+              <div class="checkbox-item" x-show="showParam('paragraphs')">
                 <input type="checkbox" id="paragraphs" x-model="params.paragraphs">
                 <label for="paragraphs">Paragraphs</label>
               </div>
@@ -1368,7 +1424,7 @@
                        diarize_version. (INVALID_QUERY_PARAMETER)
                  The two controls are mutually exclusive in the UI for that
                  reason; setting one clears the other. -->
-            <div class="field mt-2">
+            <div class="field mt-2" x-show="showParam('diarize_model')">
               <div class="field-label">Diarizer (diarize_model)</div>
               <select class="field-select" x-model="params.diarize_model"
                       @change="if (params.diarize_model) params.diarize = false">
@@ -1388,18 +1444,18 @@
             </div>
 
             <!-- Entity types when detect_entities enabled -->
-            <template x-if="params.detect_entities">
+            <template x-if="params.detect_entities && showParam('entity_prompt')">
               <div class="mt-2">
                 <div class="field-label" style="margin-bottom:6px;">Entity Prompt</div>
                 <input class="field-input" x-model="params.entity_prompt" placeholder="custom entity prompt...">
               </div>
             </template>
 
-            <div class="field mt-2">
+            <div class="field mt-2" x-show="showParam('search')">
               <div class="field-label">Search</div>
               <input class="field-input" x-model="params.search" placeholder="word1,word2">
             </div>
-            <div class="field">
+            <div class="field" x-show="showParam('replace')">
               <div class="field-label">Replace</div>
               <input class="field-input" x-model="params.replace" placeholder="original:replacement">
             </div>
@@ -1407,7 +1463,7 @@
         </div>
 
         <!-- PARAM SECTION: Redaction -->
-        <div class="param-section">
+        <div class="param-section" x-show="sectionVisible('redaction')">
           <div class="param-section-header" @click="sections.redaction = !sections.redaction">
             <div class="param-section-title">
               <i class="fas fa-user-shield"></i> Redaction
@@ -1418,15 +1474,15 @@
             <div class="field-label" style="margin-bottom:4px;">Redact (select all that apply)</div>
             <div style="display:flex;gap:4px;margin-bottom:8px;flex-wrap:wrap;">
               <button class="action-btn btn-sm btn-secondary" style="padding:2px 6px;font-size:10px;"
-                @click="redactOptions.forEach(o => { if (!params.redact.includes(o.value)) toggleRedact(o.value, true) })">Select All</button>
+                @click="redactOptions.filter(o => redactAllowed(o.value)).forEach(o => { if (!params.redact.includes(o.value)) toggleRedact(o.value, true) })">Select All</button>
               <button class="action-btn btn-sm btn-secondary" style="padding:2px 6px;font-size:10px;"
                 @click="params.redact = []">Clear All</button>
             </div>
-            <template x-for="grp in ['Groups','PII','PHI','Other']" :key="grp">
+            <template x-for="grp in redactGroups()" :key="grp">
               <div style="margin-bottom:6px;">
                 <div style="font-size:10px;font-weight:700;color:#9ca3af;text-transform:uppercase;letter-spacing:0.5px;margin-bottom:3px;" x-text="grp"></div>
                 <div class="checkbox-grid">
-                  <template x-for="opt in redactOptions.filter(o => o.group === grp)" :key="opt.value">
+                  <template x-for="opt in redactOptions.filter(o => o.group === grp && redactAllowed(o.value))" :key="opt.value">
                     <div class="checkbox-item">
                       <input type="checkbox" :id="'redact_' + opt.value"
                         :checked="params.redact.includes(opt.value)"
@@ -1441,7 +1497,7 @@
         </div>
 
         <!-- PARAM SECTION: Prompting -->
-        <div class="param-section">
+        <div class="param-section" x-show="sectionVisible('prompting')">
           <div class="param-section-header" @click="sections.prompting = !sections.prompting">
             <div class="param-section-title">
               <i class="fas fa-key"></i> Prompting
@@ -1469,7 +1525,7 @@
         </div>
 
         <!-- PARAM SECTION: Intelligence (batch only) -->
-        <div class="param-section" x-show="mode === 'batch'">
+        <div class="param-section" x-show="sectionVisible('intelligence')">
           <div class="param-section-header" @click="sections.intelligence = !sections.intelligence">
             <div class="param-section-title">
               <i class="fas fa-brain"></i> Intelligence <span class="text-muted text-sm" style="font-weight:400;">(batch only)</span>
@@ -1478,15 +1534,15 @@
           </div>
           <div x-show="sections.intelligence" class="param-section-body">
             <div class="checkbox-grid">
-              <div class="checkbox-item">
+              <div class="checkbox-item" x-show="showParam('topics')">
                 <input type="checkbox" id="topics" x-model="params.topics">
                 <label for="topics">Topics</label>
               </div>
-              <div class="checkbox-item">
+              <div class="checkbox-item" x-show="showParam('intents')">
                 <input type="checkbox" id="intents" x-model="params.intents">
                 <label for="intents">Intents</label>
               </div>
-              <div class="checkbox-item">
+              <div class="checkbox-item" x-show="showParam('sentiment')">
                 <input type="checkbox" id="sentiment" x-model="params.sentiment">
                 <label for="sentiment">Sentiment</label>
               </div>
@@ -1495,7 +1551,7 @@
         </div>
 
         <!-- PARAM SECTION: Streaming (streaming only) -->
-        <div class="param-section" x-show="mode !== 'batch'">
+        <div class="param-section" x-show="sectionVisible('streaming')">
           <div class="param-section-header" @click="sections.streaming = !sections.streaming">
             <div class="param-section-title">
               <i class="fas fa-broadcast-tower"></i> Streaming <span class="text-muted text-sm" style="font-weight:400;">(live only)</span>
@@ -1504,30 +1560,30 @@
           </div>
           <div x-show="sections.streaming" class="param-section-body">
             <div class="field-row">
-              <div class="field">
+              <div class="field" x-show="showParam('endpointing')">
                 <div class="field-label">Endpointing (ms)</div>
                 <input class="field-input" type="number" x-model.number="params.endpointing" placeholder="10">
               </div>
-              <div class="field">
+              <div class="field" x-show="showParam('utterance_end_ms')">
                 <div class="field-label">Utterance End (ms)</div>
                 <input class="field-input" type="number" x-model.number="params.utterance_end_ms" placeholder="1000">
               </div>
             </div>
-            <div class="toggle-row">
+            <div class="toggle-row" x-show="showParam('interim_results')">
               <span class="toggle-label">Interim Results</span>
               <label class="toggle-switch">
                 <input type="checkbox" x-model="params.interim_results">
                 <span class="toggle-slider"></span>
               </label>
             </div>
-            <div class="toggle-row">
+            <div class="toggle-row" x-show="showParam('vad_events')">
               <span class="toggle-label">VAD Events</span>
               <label class="toggle-switch">
                 <input type="checkbox" x-model="params.vad_events">
                 <span class="toggle-slider"></span>
               </label>
             </div>
-            <div class="toggle-row">
+            <div class="toggle-row" x-show="showParam('no_delay')">
               <span class="toggle-label">No Delay</span>
               <label class="toggle-switch">
                 <input type="checkbox" x-model="params.no_delay">
@@ -1538,7 +1594,7 @@
         </div>
 
         <!-- PARAM SECTION: Advanced -->
-        <div class="param-section">
+        <div class="param-section" x-show="sectionVisible('advanced')">
           <div class="param-section-header" @click="sections.advanced = !sections.advanced">
             <div class="param-section-title">
               <i class="fas fa-code"></i> Advanced
@@ -1547,24 +1603,24 @@
           </div>
           <div x-show="sections.advanced" class="param-section-body">
             <div class="field-row">
-              <div class="field">
+              <div class="field" x-show="showParam('version')">
                 <div class="field-label">Version</div>
                 <input class="field-input" x-model="params.version" placeholder="latest">
               </div>
-              <div class="field">
+              <div class="field" x-show="showParam('alternatives')">
                 <div class="field-label">Alternatives</div>
                 <input class="field-input" type="number" min="0" x-model.number="params.alternatives" placeholder="0">
               </div>
             </div>
-            <div class="field">
+            <div class="field" x-show="showParam('callback')">
               <div class="field-label">Callback URL</div>
               <input class="field-input" x-model="params.callback" placeholder="https://...">
             </div>
-            <div class="field">
+            <div class="field" x-show="showParam('tags')">
               <div class="field-label">Tags (comma-separated)</div>
               <input class="field-input" x-model="params.tags" placeholder="tag1,tag2">
             </div>
-            <div class="toggle-row">
+            <div class="toggle-row" x-show="showParam('mip_opt_out')">
               <span class="toggle-label">MIP Opt-Out</span>
               <label class="toggle-switch">
                 <input type="checkbox" x-model="params.mip_opt_out">
