@@ -24,7 +24,25 @@ from fastapi import Depends, FastAPI, HTTPException, Request, UploadFile, File
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
-from stt.options import Mode, query_string, serialize_params
+from stt.options import (
+    BATCH_ONLY,
+    DENIED_PARAMS,
+    FLUX_MULTILINGUAL_MODEL,
+    FLUX_MULTILINGUAL_ONLY,
+    FLUX_PARAMS,
+    FLUX_RANGES,
+    FLUX_REDACT_VALUES,
+    INTERNAL_PARAMS,
+    PARAM_ALIASES,
+    REPEATABLE_PARAMS,
+    STREAMING_ONLY,
+    ZERO_MEANS_UNSET,
+    Mode,
+    flux_validation_error,
+    is_flux_model,
+    query_string,
+    serialize_params,
+)
 
 load_dotenv()
 
@@ -323,6 +341,32 @@ fastapi_app.mount("/static", StaticFiles(directory="static"), name="static")
 # 3. Combined ASGI callable — THIS is what uvicorn serves, not fastapi_app
 app = socketio.ASGIApp(sio, fastapi_app)
 
+# Anything that looks like a bearer credential in a string bound for the
+# browser. `Token <key>` is how the SDK spells Deepgram auth in the request it
+# echoes back inside its own exception messages.
+_CREDENTIAL_RE = re.compile(r"\b(Token|Bearer)\s+\S+", re.IGNORECASE)
+
+
+def _redact_credentials(text: str) -> str:
+    """Strip bearer credentials from a string about to leave the server.
+
+    Load-bearing, and NOT redundant with the parsing in _clean_error. That
+    parsing only strips the Authorization header as a side effect of extracting
+    the `status_code: N, body: ...` tail, so any SDK error WITHOUT that tail
+    fell through to `return str(e)` with the key still in it. Verified: an
+    ApiError reading
+
+        headers: {'Authorization': 'Token <key>'}: connection refused
+
+    returned the key verbatim to the browser, and /v2/listen handshake failures
+    are exactly the shape that produces it.
+
+    DO NOT drop this in favour of the regex above. Redaction has to be
+    unconditional, because the leak lives in the path where parsing FAILED.
+    """
+    return _CREDENTIAL_RE.sub(r"\1 <redacted>", text)
+
+
 def _clean_error(e: Exception) -> str:
     """Turn a Deepgram failure into the most specific message we can safely show.
 
@@ -373,7 +417,7 @@ def _clean_error(e: Exception) -> str:
             "400 stating the actual reason."
         )
 
-    msg = str(e)
+    msg = _redact_credentials(str(e))
     m = re.search(r'status_code:\s*(\d+),\s*body:\s*(.+)$', msg, re.DOTALL)
     if m:
         return f"Deepgram {m.group(1)}: {m.group(2).strip()}"
@@ -397,6 +441,43 @@ _socket_tiers: dict[str, bool] = {}
 @fastapi_app.get("/")
 async def index():
     return FileResponse("templates/index.html")
+
+
+@fastapi_app.get("/api/param-gating")
+async def param_gating():
+    """Serve stt/options.py's gating rules to the browser.
+
+    The frontend used to keep its own copies of the mode lists, hardcoded in two
+    functions, and they had drifted: the JS lists were missing channels,
+    encoding, sample_rate, filler_words, measurements, utt_split and
+    detect_language, so the URL bar showed a request that was not the request
+    being sent. In an app whose headline feature is "here is the exact URL,
+    copy it into curl", a URL that lies is the worst possible bug.
+
+    options.py calls itself the single parameter gate. This endpoint is what
+    makes that true rather than aspirational. DO NOT reintroduce a copy of any
+    of these lists in JavaScript.
+
+    Deliberately unauthenticated: it is a description of Deepgram's public API
+    surface, it spends nothing, and the params panel has to render for the
+    anonymous visitors this app exists to demo to.
+    """
+    return {
+        "streaming_only": sorted(STREAMING_ONLY),
+        "batch_only": sorted(BATCH_ONLY),
+        "internal": sorted(INTERNAL_PARAMS),
+        "denied": sorted(DENIED_PARAMS),
+        "aliases": PARAM_ALIASES,
+        "repeatable": sorted(REPEATABLE_PARAMS),
+        "zero_means_unset": sorted(ZERO_MEANS_UNSET),
+        "flux": {
+            "params": sorted(FLUX_PARAMS),
+            "multilingual_only": sorted(FLUX_MULTILINGUAL_ONLY),
+            "multilingual_model": FLUX_MULTILINGUAL_MODEL,
+            "ranges": {k: list(v) for k, v in FLUX_RANGES.items()},
+            "redact_values": sorted(FLUX_REDACT_VALUES),
+        },
+    }
 
 
 @fastapi_app.post("/upload", dependencies=[Depends(_enforce_access)])
@@ -510,12 +591,14 @@ async def _stt_streaming(text: str, tts_model: str, stt_params: dict, api_key: s
 
     segments = []
 
-    async with dg.listen.v1.connect(**sdk_kwargs) as ws:
+    async with _connect_stream(dg, sdk_kwargs) as ws:
         async def on_message(msg, **kwargs):
-            if isinstance(msg, ListenV1Results) and bool(msg.is_final):
-                t = msg.channel.alternatives[0].transcript
-                if t.strip():
-                    segments.append(t)
+            # _transcript_event is the same parser the socket path uses, so a
+            # Flux turn counts as a segment here on exactly the same rule
+            # (EndOfTurn only) that makes it a final line in the browser.
+            payload = _transcript_event(msg)
+            if payload and payload["is_final"] and payload["transcript"].strip():
+                segments.append(payload["transcript"])
 
         ws.on(EventType.MESSAGE, on_message)
         listen_task = asyncio.create_task(ws.start_listening())
@@ -549,7 +632,12 @@ async def _stt_streaming_raw(text: str, tts_model: str, stt_params: dict, api_ke
     """
     base_url = _resolve_stt_host(stt_params)
     qs = query_string(stt_params, Mode.STREAMING)
-    ws_url = f"wss://{base_url}/v1/listen?{qs}" if qs else f"wss://{base_url}/v1/listen"
+    # Flux lives on a different path. A custom endpoint is unlikely to serve it,
+    # but hardcoding /v1/listen for a flux-* model would send the request
+    # somewhere it certainly is not, and the failure would look like the
+    # endpoint's fault rather than the model's.
+    path = "/v2/listen" if is_flux_model(stt_params.get("model")) else "/v1/listen"
+    ws_url = f"wss://{base_url}{path}?{qs}" if qs else f"wss://{base_url}{path}"
     headers = {"Authorization": f"Token {api_key}"}
 
     # Generate TTS audio first (full buffer), then stream into WebSocket
@@ -583,7 +671,12 @@ async def _stt_streaming_raw(text: str, tts_model: str, stt_params: dict, api_ke
                     data = json_mod.loads(msg)
                     raw_responses.append(data)
                     # Extract transcript from various response shapes
-                    if "deepgram_stt" in data:
+                    turn = _transcript_event(data)
+                    if turn is not None:
+                        # Flux TurnInfo, same EndOfTurn-only rule as everywhere else.
+                        if turn["is_final"] and turn["transcript"].strip():
+                            segments.append(turn["transcript"])
+                    elif "deepgram_stt" in data:
                         stt = data["deepgram_stt"]
                         if isinstance(stt, list):
                             stt = stt[0]
@@ -817,11 +910,18 @@ _SDK_CONNECT_KWARGS = frozenset(
     inspect.signature(AsyncDeepgramClient(api_key="_").listen.v1.connect).parameters
 ) - {"self", "request_options"}
 
+# The two endpoints name different keywords, so the split below has to know
+# which one the request is bound for. v2 names none of v1's formatting params
+# and adds the end-of-turn knobs.
+_FLUX_CONNECT_KWARGS = frozenset(
+    inspect.signature(AsyncDeepgramClient(api_key="_").listen.v2.connect).parameters
+) - {"self", "request_options"}
+
 
 def _params_to_sdk_kwargs(raw_params: dict) -> dict:
-    """Convert a frontend params dict into deepgram-sdk 6.x connect() arguments.
+    """Convert a frontend params dict into deepgram-sdk connect() arguments.
 
-    Splits into two buckets, because the SDK enumerates only ~28 of Deepgram's
+    Splits into two buckets, because the SDK enumerates only some of Deepgram's
     query parameters as keywords and raises TypeError on anything else:
 
         AsyncV1Client.connect() got an unexpected keyword argument 'keyterms'
@@ -840,197 +940,361 @@ def _params_to_sdk_kwargs(raw_params: dict) -> dict:
     """
     serialized = serialize_params(raw_params, Mode.STREAMING)
     serialized.setdefault("model", "nova-2")
+    named = (
+        _FLUX_CONNECT_KWARGS
+        if is_flux_model(serialized.get("model"))
+        else _SDK_CONNECT_KWARGS
+    )
 
-    kwargs = {k: v for k, v in serialized.items() if k in _SDK_CONNECT_KWARGS}
-    passthrough = {k: v for k, v in serialized.items() if k not in _SDK_CONNECT_KWARGS}
+    kwargs = {k: v for k, v in serialized.items() if k in named}
+    passthrough = {k: v for k, v in serialized.items() if k not in named}
     if passthrough:
         logger.debug("params not named by the SDK, sent as query: %s", sorted(passthrough))
         kwargs["request_options"] = {"additional_query_parameters": passthrough}
     return kwargs
 
 
-# --- Streaming Task ---
+def _connect_stream(dg: AsyncDeepgramClient, sdk_kwargs: dict):
+    """Open the stream on the endpoint the model implies.
 
-async def streaming_task(sid: str, params: dict, stop_event: asyncio.Event) -> None:
-    """Owns the Deepgram WebSocket lifecycle for one SocketIO session.
-    Runs as an asyncio.Task. Emits stream_started, transcription_update, stream_finished.
+    Flux is not another model on /v1/listen, it is /v2/listen. Sending a Flux
+    model to v1 is a 400 that says so plainly
+    (`V2_MODEL_ON_V1_LISTEN_ENDPOINT`), which is why nothing here guards
+    against it: Deepgram's own message is better than one we would write, and
+    duplicating it would be a second source of truth to keep in sync.
     """
-    api_key = os.getenv("DEEPGRAM_API_KEY", "")
-    dg = AsyncDeepgramClient(api_key=api_key)
+    if is_flux_model(sdk_kwargs.get("model")):
+        return dg.listen.v2.connect(**sdk_kwargs)
+    return dg.listen.v1.connect(**sdk_kwargs)
+
+
+def _as_dict(msg) -> dict:
+    """Normalise one stream message to a plain dict, whichever endpoint sent it.
+
+    DO NOT replace this with isinstance checks against the v2 types. On
+    /v2/listen they are never true. The SDK declares
+
+        V2SocketClientResponse = Union[ListenV2Connected, ListenV2TurnInfo,
+                                       Any, ListenV2ConfigureFailure,
+                                       ListenV2FatalError]
+
+    and that bare `Any` swallows everything: construct_type matches it first and
+    hands back the parsed JSON untouched, so every Flux message arrives as a
+    dict. The v1 union has no `Any`, so v1 messages arrive as models. Writing
+    the Flux handler the way the v1 handler is written therefore drops every
+    turn in silence. Measured against production with deepgram-sdk 7.6.0.
+
+    Normalising instead of isinstance-ing also survives the fix: a later SDK
+    that tightens the union starts sending models and this keeps working.
+    """
+    if isinstance(msg, dict):
+        return msg
+    dump = getattr(msg, "model_dump", None)
+    if callable(dump):
+        return dump()
+    return dict(getattr(msg, "__dict__", {}) or {})
+
+
+# The one Flux turn event that means "this transcript is settled". Everything
+# else — Update, StartOfTurn, EagerEndOfTurn, TurnResumed — is the same turn
+# still being revised, which is what `is_final: false` already means.
+#
+# EagerEndOfTurn is deliberately NOT final even though its transcript is
+# guaranteed to match the EndOfTurn that follows it: a TurnResumed can land in
+# between and extend the turn, and treating the eager event as final would
+# commit a line the speaker had not finished.
+FLUX_FINAL_EVENTS = {"EndOfTurn"}
+
+# Flux reports a failed stream in-band instead of closing the socket.
+FLUX_ERROR_TYPES = {"FatalError", "ConfigureFailure"}
+
+
+def _transcript_event(msg) -> dict | None:
+    """Parse one stream message into the transcription_update payload, or None.
+
+    THE single parser for both endpoints. Returns None for messages that carry
+    no transcript at all (Metadata, Connected, SpeechStarted), so callers can
+    treat "no payload" as "nothing to show".
+
+    The Flux fields below the first three are additive: the frontend renders a
+    turn exactly like a v1 interim/final, and the responses pane gets the turn
+    index and the end-of-turn confidence that are the whole reason to look at
+    Flux in a diagnostic tool.
+    """
+    if isinstance(msg, ListenV1Results):
+        return {
+            "transcript": msg.channel.alternatives[0].transcript,
+            "is_final": bool(msg.is_final),
+            "start": msg.start,
+        }
+
+    d = _as_dict(msg)
+    if d.get("type") != "TurnInfo":
+        return None
+
+    event = d.get("event")
+    return {
+        "transcript": d.get("transcript") or "",
+        "is_final": event in FLUX_FINAL_EVENTS,
+        "start": d.get("audio_window_start"),
+        "flux_event": event,
+        "turn_index": d.get("turn_index"),
+        "end_of_turn_confidence": d.get("end_of_turn_confidence"),
+        "audio_window_end": d.get("audio_window_end"),
+        "words": d.get("words"),
+        "languages": d.get("languages"),
+    }
+
+
+def _stream_message_handler(sid: str):
+    """Build the EventType.MESSAGE callback for one session, either endpoint."""
+
+    async def on_message(msg, **kwargs):
+        if isinstance(msg, ListenV1Metadata):
+            if sid in _sessions:
+                _sessions[sid]["request_id"] = msg.request_id
+            return
+
+        d = _as_dict(msg)
+        kind = d.get("type")
+
+        if kind == "Connected":
+            # Flux's equivalent of v1 Metadata, and the only place the request
+            # id shows up before the first turn.
+            if sid in _sessions:
+                _sessions[sid]["request_id"] = d.get("request_id")
+            return
+
+        if kind in FLUX_ERROR_TYPES:
+            detail = (
+                d.get("description")
+                or d.get("message")
+                or json_mod.dumps(d)[:500]
+            )
+            await sio.emit(
+                "stream_error",
+                {"message": _redact_credentials(f"Deepgram {kind}: {detail}")},
+                to=sid,
+            )
+            return
+
+        payload = _transcript_event(msg)
+        if payload is not None:
+            if payload.get("flux_event") is not None and sid in _sessions:
+                # Remember whether the stream is sitting mid-turn. See
+                # _unfinished_turn_notice for why that has to be reported.
+                _sessions[sid]["pending_turn"] = (
+                    None if payload["is_final"] else (payload["transcript"] or "").strip() or None
+                )
+            await sio.emit("transcription_update", payload, to=sid)
+
+    return on_message
+
+
+def _unfinished_turn_notice(pending: str) -> dict:
+    """Explain a Flux transcript that stops short of the audio.
+
+    Flux ends a turn on end-of-turn confidence, or after eot_timeout_ms of
+    silence WITHIN THE AUDIO. CloseStream flushes turns that have already
+    ended; it does NOT force the one in progress to end. So if the audio stops
+    while someone is still mid-sentence, that sentence is never finalised and
+    never appears in the transcript.
+
+    Measured, because it is easy to misread as Flux dropping words. Same 19-word
+    clip, 8 runs each: with a second of trailing silence, 8/8 returned all 19
+    words; with the clip cut tight to the last syllable, 0/8 did — every run
+    returned only the 8 words of the first completed turn.
+
+    DO NOT "fix" this by injecting silence before CloseStream. It works for raw
+    encodings and cannot work for containerised WebM/Ogg (there are no valid
+    silent bytes to append), so it would quietly change behaviour depending on
+    input format. Worse, it makes the tool transcribe audio the user did not
+    supply, which is the same sin as silently dropping a parameter: the output
+    stops describing the input. Report it instead.
+    """
+    return {
+        # Short enough for a toast that dismisses itself; the full explanation
+        # stays in the responses pane, which does not.
+        "summary": "Stream ended mid-turn — the last turn is missing from the transcript.",
+        "message": (
+            "Stream ended mid-turn, so Flux never finalised the last one and it "
+            "is not in the transcript above. Flux ends a turn on confidence, or "
+            "after eot_timeout_ms of silence in the AUDIO — a stream that just "
+            "stops leaves the turn open, and CloseStream does not force it shut. "
+            "Give the audio a second of trailing silence, or lower eot_timeout_ms."
+        ),
+        "unfinalized_transcript": pending,
+    }
+
+
+# --- Streaming lifecycle ---
+#
+# streaming_task and file_streaming_task used to be two near-identical copies of
+# the same 60 lines: connect, wire up the handler, announce, flush on close,
+# report, clean up. The only genuinely different part is what drives the socket
+# in the middle. They are one function now with that middle passed in, which is
+# why adding the Flux endpoint was a change in one place rather than two that
+# have to be kept in step.
+
+CHUNK_SIZE = 4096
+
+# Under Deepgram's ~10s idle timeout on /v1/listen.
+KEEP_ALIVE_SECONDS = 8
+
+
+def _start_keep_alive(sid: str, ws, stop_event: asyncio.Event):
+    """Keep an idle v1 stream open. Returns None when the endpoint has no such message.
+
+    /v2/listen has exactly two control messages, Configure and CloseStream —
+    there is no KeepAlive in the Flux docs and no send_keep_alive on the v2
+    socket client, so calling it there would raise AttributeError and kill the
+    stream eight seconds in.
+
+    Flux does not need one from this app anyway: the only driver that can idle
+    is the mic, and MediaRecorder keeps emitting frames through silence.
+    """
+    if not hasattr(ws, "send_keep_alive"):
+        return None
+
+    async def loop():
+        while not stop_event.is_set():
+            await asyncio.sleep(KEEP_ALIVE_SECONDS)
+            if stop_event.is_set():
+                return
+            try:
+                await ws.send_keep_alive()
+            except Exception as e:
+                logger.warning("[%s] keep_alive error: %s", sid, e)
+                return
+
+    return asyncio.create_task(loop())
+
+
+async def _run_stream(sid: str, params: dict, drive) -> None:
+    """Own the Deepgram WebSocket lifecycle for one SocketIO session.
+
+    `drive(ws)` is the caller's half: the mic waits to be told to stop while
+    on_audio_stream feeds the socket, the file reader pumps chunks. Everything
+    else is the same for both, and for both endpoints.
+
+    Emits stream_started, transcription_update, stream_error, stream_finished.
+    """
+    problem = flux_validation_error(params)
+    if problem:
+        # Deepgram would reject these too, but only with "Unexpected error when
+        # initializing websocket connection", which names nothing. Refusing here
+        # is the only way the user learns which knob is out of range.
+        logger.info("[%s] refused before connecting: %s", sid, problem)
+        await sio.emit("stream_error", {"message": problem}, to=sid)
+        await sio.emit("stream_finished", {"request_id": None}, to=sid)
+        _sessions.pop(sid, None)
+        return
+
+    dg = AsyncDeepgramClient(api_key=os.getenv("DEEPGRAM_API_KEY", ""))
     sdk_kwargs = _params_to_sdk_kwargs(params)
 
     try:
-        async with dg.listen.v1.connect(**sdk_kwargs) as ws:
+        async with _connect_stream(dg, sdk_kwargs) as ws:
             # Store ws so on_audio_stream can call ws.send_media()
             if sid in _sessions:
                 _sessions[sid]["ws"] = ws
 
-            async def on_message(msg, **kwargs):
-                logger.debug("[%s] on_message type=%s", sid, type(msg).__name__)
-                if isinstance(msg, ListenV1Metadata):
-                    if sid in _sessions:
-                        _sessions[sid]["request_id"] = msg.request_id
-                elif isinstance(msg, ListenV1Results):
-                    transcript = msg.channel.alternatives[0].transcript
-                    is_final = bool(msg.is_final)
-                    await sio.emit("transcription_update", {
-                        "transcript": transcript,
-                        "is_final": is_final,
-                    }, to=sid)
-
-            ws.on(EventType.MESSAGE, on_message)
+            ws.on(EventType.MESSAGE, _stream_message_handler(sid))
             listen_task = asyncio.create_task(ws.start_listening())
 
             # Emit stream_started immediately — don't gate on Metadata arrival
             await sio.emit("stream_started", {"request_id": None}, to=sid)
 
-            # Keep-alive loop — sends every 8s (under Deepgram's ~10s idle timeout)
-            async def keep_alive_loop():
-                while not stop_event.is_set():
-                    await asyncio.sleep(8)
-                    if not stop_event.is_set():
-                        try:
-                            await ws.send_keep_alive()
-                        except Exception as e:
-                            logger.warning("[%s] keep_alive error: %s", sid, e)
-                            break
+            try:
+                await drive(ws)
+            finally:
+                # Graceful shutdown: CloseStream, then wait for Deepgram to
+                # flush its final results. In a finally because a stream that
+                # died mid-drive still has buffered audio worth recovering.
+                try:
+                    await ws.send_close_stream()
+                    await listen_task
+                except (asyncio.CancelledError, Exception) as e:
+                    logger.warning("[%s] error during graceful shutdown: %s", sid, e)
+                    if not listen_task.done():
+                        listen_task.cancel()
 
-            ka_task = asyncio.create_task(keep_alive_loop())
+    except Exception as e:
+        logger.error("[%s] stream error: %s", sid, e)
+        _sessions.pop(sid, None)  # Free slot before notifying client so retries aren't blocked
+        await sio.emit("stream_error", {"message": _clean_error(e)}, to=sid)
+    finally:
+        session = _sessions.get(sid) or {}
+        pending = session.get("pending_turn")
+        if pending:
+            await sio.emit("stream_notice", _unfinished_turn_notice(pending), to=sid)
+        await sio.emit("stream_finished", {"request_id": session.get("request_id")}, to=sid)
+        _sessions.pop(sid, None)
+        logger.info("[%s] stream finished, session cleaned up", sid)
 
+
+async def streaming_task(sid: str, params: dict, stop_event: asyncio.Event) -> None:
+    """Microphone streaming. Audio arrives via on_audio_stream, so this only waits."""
+
+    async def drive(ws):
+        ka_task = _start_keep_alive(sid, ws, stop_event)
+        try:
             # Wait for stop signal from on_toggle_transcription(stop) or
             # disconnect(). Anonymous streams also stop on a wall-clock cap:
             # an untokened mic stream left open is the largest unbounded spend
             # path in the app, and the per-request rate limit cannot bound it
             # because one connect can stream for hours.
-            privileged = _sessions.get(sid, {}).get("privileged", False)
-            if privileged:
+            if _sessions.get(sid, {}).get("privileged", False):
                 await stop_event.wait()
-            else:
-                try:
-                    await asyncio.wait_for(
-                        stop_event.wait(), timeout=ANON_MAX_STREAM_SECONDS
-                    )
-                except asyncio.TimeoutError:
-                    logger.info("[%s] anon stream hit the %ss cap", sid, ANON_MAX_STREAM_SECONDS)
-                    await sio.emit("stream_limit_reached", {
-                        "reason": f"Demo streams stop after {ANON_MAX_STREAM_SECONDS} seconds. "
-                                  f"Add an access token for unlimited streaming.",
-                    }, to=sid)
-
-            # Graceful shutdown: cancel keep-alive, send CloseStream, await final results
-            ka_task.cancel()
+                return
             try:
-                await ws.send_close_stream()
-                await listen_task  # blocks until Deepgram flushes final Results + closes
-            except (asyncio.CancelledError, Exception) as e:
-                logger.warning("[%s] Error during graceful shutdown: %s", sid, e)
-                if not listen_task.done():
-                    listen_task.cancel()
+                await asyncio.wait_for(
+                    stop_event.wait(), timeout=ANON_MAX_STREAM_SECONDS
+                )
+            except asyncio.TimeoutError:
+                logger.info("[%s] anon stream hit the %ss cap", sid, ANON_MAX_STREAM_SECONDS)
+                await sio.emit("stream_limit_reached", {
+                    "reason": f"Demo streams stop after {ANON_MAX_STREAM_SECONDS} seconds. "
+                              f"Add an access token for unlimited streaming.",
+                }, to=sid)
+        finally:
+            if ka_task is not None:
+                ka_task.cancel()
 
-    except Exception as e:
-        logger.error("[%s] streaming_task error: %s", sid, e)
-        _sessions.pop(sid, None)  # Free slot before notifying client so retries aren't blocked
-        await sio.emit("stream_error", {"message": _clean_error(e)}, to=sid)
-    finally:
-        request_id = _sessions[sid].get("request_id") if sid in _sessions else None
-        await sio.emit("stream_finished", {"request_id": request_id}, to=sid)
-        _sessions.pop(sid, None)
-        logger.info("[%s] streaming_task finished, session cleaned up", sid)
-
-
-# --- File Streaming Task ---
-
-CHUNK_SIZE = 4096
+    await _run_stream(sid, params, drive)
 
 
 async def file_streaming_task(
     sid: str, filename: str, params: dict, stop_event: asyncio.Event
 ) -> None:
-    """Streams an uploaded file to Deepgram over WebSocket.
-    Mirrors streaming_task() but reads from a local file instead of waiting on stop_event.
-    Emits stream_started, transcription_update, stream_finished.
-    """
-    api_key = os.getenv("DEEPGRAM_API_KEY", "")
-    dg = AsyncDeepgramClient(api_key=api_key)
-    sdk_kwargs = _params_to_sdk_kwargs(params)
+    """Streams an uploaded file to Deepgram over WebSocket, paced at 1x."""
     file_path = TEMP_DIR / filename
 
-    try:
-        async with dg.listen.v1.connect(**sdk_kwargs) as ws:
-            # Store ws reference in session
-            if sid in _sessions:
-                _sessions[sid]["ws"] = ws
-
-            async def on_message(msg, **kwargs):
-                logger.debug("[%s] file on_message type=%s", sid, type(msg).__name__)
-                if isinstance(msg, ListenV1Metadata):
-                    if sid in _sessions:
-                        _sessions[sid]["request_id"] = msg.request_id
-                elif isinstance(msg, ListenV1Results):
-                    transcript = msg.channel.alternatives[0].transcript
-                    is_final = bool(msg.is_final)
-                    await sio.emit("transcription_update", {
-                        "transcript": transcript,
-                        "is_final": is_final,
-                        "start": msg.start,
-                    }, to=sid)
-
-            ws.on(EventType.MESSAGE, on_message)
-            listen_task = asyncio.create_task(ws.start_listening())
-
-            # Emit stream_started immediately — same pattern as streaming_task
-            await sio.emit("stream_started", {"request_id": None}, to=sid)
-
-            # Compute real-time pacing: sleep between chunks so Deepgram
-            # receives audio at 1x speed, keeping transcripts in sync with playback.
-            try:
-                audio_info = MutagenFile(file_path)
-                duration = audio_info.info.length if audio_info else None
-            except Exception:
-                duration = None
+    async def drive(ws):
+        # Sleep between chunks so Deepgram receives audio at real-time speed,
+        # keeping transcripts in sync with playback.
+        try:
+            audio_info = MutagenFile(file_path)
+            duration = audio_info.info.length if audio_info else None
+        except Exception:
+            duration = None
+        try:
             file_size = file_path.stat().st_size
-            sleep_per_chunk = (CHUNK_SIZE / file_size * duration) if duration and file_size else 0
+        except FileNotFoundError:
+            await sio.emit("stream_error", {"message": f"File not found: {filename}"}, to=sid)
+            return
+        sleep_per_chunk = (CHUNK_SIZE / file_size * duration) if duration and file_size else 0
 
-            # Stream file in chunks; stop early if stop_event set
-            try:
-                with open(file_path, "rb") as f:
-                    while not stop_event.is_set():
-                        chunk = f.read(CHUNK_SIZE)
-                        if not chunk:
-                            break
-                        await ws.send_media(chunk)
-                        if sleep_per_chunk:
-                            await asyncio.sleep(sleep_per_chunk)
-            except FileNotFoundError:
-                await sio.emit("stream_error", {"message": f"File not found: {filename}"}, to=sid)
-                # Graceful shutdown even on FileNotFoundError
-                try:
-                    await ws.send_close_stream()
-                    await listen_task
-                except (asyncio.CancelledError, Exception) as e:
-                    logger.warning("[%s] Error during file-not-found shutdown: %s", sid, e)
-                    if not listen_task.done():
-                        listen_task.cancel()
-                return
+        with open(file_path, "rb") as f:
+            while not stop_event.is_set():
+                chunk = f.read(CHUNK_SIZE)
+                if not chunk:
+                    break
+                await ws.send_media(chunk)
+                if sleep_per_chunk:
+                    await asyncio.sleep(sleep_per_chunk)
 
-            # EOF reached (or stop_event set) — flush final words (STR-04 pattern)
-            try:
-                await ws.send_close_stream()
-                await listen_task  # blocks until Deepgram flushes final Results + closes
-            except (asyncio.CancelledError, Exception) as e:
-                logger.warning("[%s] Error during file streaming graceful shutdown: %s", sid, e)
-                if not listen_task.done():
-                    listen_task.cancel()
-
-    except Exception as e:
-        logger.error("[%s] file_streaming_task error: %s", sid, e)
-        _sessions.pop(sid, None)
-        await sio.emit("stream_error", {"message": _clean_error(e)}, to=sid)
-    finally:
-        request_id = _sessions[sid].get("request_id") if sid in _sessions else None
-        await sio.emit("stream_finished", {"request_id": request_id}, to=sid)
-        _sessions.pop(sid, None)
-        logger.info("[%s] file_streaming_task finished, session cleaned up", sid)
+    await _run_stream(sid, params, drive)
 
 
 # --- SocketIO Event Handlers ---
