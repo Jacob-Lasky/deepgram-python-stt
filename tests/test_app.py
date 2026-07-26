@@ -401,3 +401,34 @@ def test_keep_alive_still_runs_on_v1():
             pass
 
     asyncio.run(check())
+
+
+# --- TTS round-trip container ---------------------------------------------
+
+
+def test_round_trip_uses_a_container_flux_can_decode():
+    """Flux CANNOT decode MP3. Verified live: an MP3 stream to /v2/listen closes
+    with `received 1005 (no status received)` and transcribes nothing, which is
+    how the round trip shipped broken for Flux. Ogg-Opus works."""
+    import app as app_mod
+
+    assert app_mod._tts_round_trip_encoding({"model": "flux-general-en"}) == "opus"
+    assert app_mod._tts_round_trip_encoding({"model": "flux-general-multi"}) == "opus"
+
+
+def test_round_trip_still_uses_mp3_everywhere_else():
+    """MP3 is what every v1 run has always used; do not churn it."""
+    import app as app_mod
+
+    assert app_mod._tts_round_trip_encoding({"model": "nova-3"}) == "mp3"
+    assert app_mod._tts_round_trip_encoding({}) == "mp3"
+
+
+def test_round_trip_never_sends_an_encoding_param_to_stt():
+    """Load-bearing: the round trip lets Deepgram sniff the container, and adding
+    an STT `encoding` is the documented trap that returns empty transcripts. The
+    Flux fix changes the CONTAINER GENERATED, never the STT params."""
+    from stt.options import Mode, serialize_params
+
+    for model in ("nova-3", "flux-general-en"):
+        assert "encoding" not in serialize_params({"model": model}, Mode.STREAMING)

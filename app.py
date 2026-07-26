@@ -555,6 +555,29 @@ async def _elevenlabs_tts_generate(text: str, voice_id: str, api_key: str) -> by
         return resp.content
 
 
+# TTS container for the round trip, chosen by which STT endpoint will read it.
+#
+# DO NOT send an `encoding` param to STT to go with this. The round trip
+# deliberately lets Deepgram sniff the container, and adding `encoding` is the
+# exact trap that makes a round trip return empty transcripts. This picks the
+# CONTAINER the STT side can decode, which satisfies the same constraint.
+#
+# MP3 works on /v1/listen and is what every non-Flux run uses. Flux cannot
+# decode it at all: verified live, an MP3 stream to /v2/listen closes with
+# `received 1005 (no status received)` and transcribes nothing. Its accepted
+# list is linear16/linear32/mulaw/alaw/opus/ogg-opus, and Ogg-Opus is the one
+# Deepgram TTS can emit that /v2/listen reads with no encoding hint.
+TTS_ROUND_TRIP_ENCODING = "mp3"
+TTS_ROUND_TRIP_ENCODING_FLUX = "opus"
+
+
+def _tts_round_trip_encoding(stt_params: dict) -> str:
+    """The TTS container to generate so the chosen STT model can read it back."""
+    if is_flux_model(stt_params.get("model")):
+        return TTS_ROUND_TRIP_ENCODING_FLUX
+    return TTS_ROUND_TRIP_ENCODING
+
+
 async def _stt_batch(audio_bytes: bytes, stt_params: dict, api_key: str) -> dict:
     """Transcribe audio bytes via Deepgram pre-recorded (batch) API."""
     headers = {"Authorization": f"Token {api_key}"}
@@ -613,7 +636,10 @@ async def _stt_streaming(text: str, tts_model: str, stt_params: dict, api_key: s
                 "POST",
                 "https://api.deepgram.com/v1/speak",
                 headers={**headers, "Content-Type": "application/json"},
-                params={"model": tts_model, "encoding": "mp3"},
+                params={
+                    "model": tts_model,
+                    "encoding": _tts_round_trip_encoding(stt_params),
+                },
                 json={"text": text},
             ) as tts_resp:
                 tts_resp.raise_for_status()
@@ -657,7 +683,10 @@ async def _stt_streaming_raw(text: str, tts_model: str, stt_params: dict, api_ke
         tts_resp = await client.post(
             "https://api.deepgram.com/v1/speak",
             headers={**headers, "Content-Type": "application/json"},
-            params={"model": tts_model, "encoding": "mp3"},
+            params={
+                "model": tts_model,
+                "encoding": _tts_round_trip_encoding(stt_params),
+            },
             json={"text": text},
         )
         tts_resp.raise_for_status()
