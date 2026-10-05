@@ -788,6 +788,32 @@
     .mt-2 { margin-top: 8px; }
     .divider { height: 1px; background: #1f2937; margin: 4px 0; }
 
+    /* ---- Access-tier banner ---- */
+    .tier-banner {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      gap: 10px;
+      padding: 8px 18px;
+      font-size: 13px;
+      background: #1e293b;
+      color: #cbd5e1;
+      border-bottom: 1px solid #2d3748;
+    }
+    .tier-banner-limit {
+      background: #3a1d22;
+      color: #fca5a5;
+      border-bottom-color: #5c2b33;
+    }
+    .tier-unlock {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      margin-left: auto;
+    }
+    .tier-unlock .field-input { width: 200px; }
+    .tier-unlock-error { color: #fca5a5; }
+
     [x-cloak] { display: none !important; }
 
     /* Streaming indicator */
@@ -989,11 +1015,23 @@
        class="tier-banner" :class="limitNotice ? 'tier-banner-limit' : ''">
     <i :class="limitNotice ? 'fas fa-exclamation-circle' : 'fas fa-info-circle'"></i>
     <span x-show="limitNotice" x-text="limitNotice"></span>
-    <span x-show="!limitNotice && tier.known && !tier.privileged">
+    <span x-show="!limitNotice && tier.known && !tier.privileged && tier.maxTtsChars">
       Demo mode: streams stop after <span x-text="tier.maxStreamSeconds"></span>s and
       TTS text is capped at <span x-text="tier.maxTtsChars"></span> characters.
-      Open this page with <code>?token=YOUR_TOKEN</code> for unlimited use.
     </span>
+    <!-- Unlock box: type the password (or paste the token) here instead of
+         building a ?token= link. The credential lives in sessionStorage only. -->
+    <form x-show="tier.known && !tier.privileged" class="tier-unlock"
+          data-testid="unlock-form" @submit.prevent="unlock()">
+      <input type="password" class="field-input" data-testid="unlock-input"
+             x-model="unlockInput" autocomplete="current-password"
+             :placeholder="tier.passwordEnabled ? 'Password or token' : 'Access token'">
+      <button type="submit" class="action-btn btn-primary" data-testid="unlock-submit"
+              :disabled="!unlockInput.trim() || streamBusy"
+              :title="streamBusy ? 'Finish the current stream first' : ''">Unlock</button>
+      <span x-show="authError" class="tier-unlock-error" data-testid="unlock-error"
+            x-text="authError"></span>
+    </form>
   </div>
 
   <div class="app-layout">

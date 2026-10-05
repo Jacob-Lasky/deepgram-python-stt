@@ -111,12 +111,39 @@ def _prune(log: deque, cutoff: float) -> None:
         log.popleft()
 
 
-def _client_ip(request: Request) -> str:
-    """Best-effort client IP. Behind Fly's proxy the real one is in a header."""
-    forwarded = request.headers.get("fly-client-ip") or request.headers.get("x-forwarded-for", "")
+def _ip_from_headers(get_header, fallback: str) -> str:
+    """Best-effort client IP. Behind Fly's proxy the real one is in a header.
+
+    Fly OVERWRITES a caller-supplied Fly-Client-IP, so trusting it first is
+    safe on Fly. Measured 2026-10-05: 17 requests each carrying a different
+    forged Fly-Client-IP hit the per-IP 429 on the 16th, exactly as unforged
+    ones do. X-Forwarded-For is only a fallback for running off Fly, where it
+    IS forgeable; do not move it ahead of Fly-Client-IP.
+    """
+    forwarded = get_header("fly-client-ip") or get_header("x-forwarded-for") or ""
     if forwarded:
         return forwarded.split(",")[0].strip()
-    return request.client.host if request.client else "unknown"
+    return fallback
+
+
+def _client_ip(request: Request) -> str:
+    return _ip_from_headers(
+        request.headers.get, request.client.host if request.client else "unknown"
+    )
+
+
+def _environ_ip(environ: dict) -> str:
+    """Same as _client_ip, for a SocketIO connect's ASGI environ.
+
+    The fallback reads the ASGI scope, NOT environ["REMOTE_ADDR"]: engineio's
+    ASGI driver hardcodes that to 127.0.0.1, which would put every headerless
+    socket client in one per-IP bucket and let one guesser lock out all of them.
+    """
+    client = (environ.get("asgi.scope") or {}).get("client")
+    return _ip_from_headers(
+        lambda name: environ.get("HTTP_" + name.upper().replace("-", "_"), ""),
+        client[0] if client else "unknown",
+    )
 
 
 def _anon_rate_limit(ip: str) -> str | None:
@@ -167,11 +194,15 @@ def _sweep_stale_ip_windows(now: float) -> None:
     if _sweep_countdown > 0:
         return
     _sweep_countdown = _SWEEP_EVERY
-    cutoff = now - ANON_RATE_WINDOW_S
-    for key in list(_anon_hits):
-        _prune(_anon_hits[key], cutoff)
-        if not _anon_hits[key]:
-            del _anon_hits[key]
+    _drop_expired_windows(_anon_hits, now - ANON_RATE_WINDOW_S)
+
+
+def _drop_expired_windows(logs: dict[str, deque], cutoff: float) -> None:
+    """Prune every per-key window, then delete the ones left empty."""
+    for key in list(logs):
+        _prune(logs[key], cutoff)
+        if not logs[key]:
+            del logs[key]
 
 
 # --- Security: the access token that lifts the anonymous limits ---
@@ -220,27 +251,115 @@ def _extract_token(request: Request) -> str:
     return (request.query_params.get("token") or "").strip()
 
 
-def _is_privileged(token: str) -> bool:
-    """Does this token lift the anonymous limits?
+# --- Optional human-memorable password, accepted wherever the token is ---
+# The token is 48 random hex characters: fine in a share link, miserable to
+# type. APP_PASSWORD is a second credential a person can remember and enter in
+# the page's unlock box, so the token never has to be pasted anywhere.
+#
+# A memorable password is guessable where the token is not, so password checks
+# are RATE-LIMITED and the token check is not. DO NOT drop the failure limits on
+# the grounds that the anonymous request limits already cover it: the SocketIO
+# connect resolves a tier with no request charge at all and reports the result
+# in `access_tier`, which without these limits is an unlimited guessing oracle.
+# The global ceiling exists for the same reason the anonymous one does: IPs are
+# cheap. Its cost is that a flood of wrong guesses locks the PASSWORD out for
+# everyone for up to an hour; the token is unaffected, which is the recovery.
+APP_PASSWORD = os.getenv("APP_PASSWORD", "").strip()
+APP_PASSWORD_MIN_LEN = 12
+AUTH_FAIL_LIMIT = int(os.getenv("AUTH_FAIL_LIMIT", 5))
+AUTH_FAIL_WINDOW_S = int(os.getenv("AUTH_FAIL_WINDOW_S", 900))
+AUTH_FAIL_GLOBAL_LIMIT = int(os.getenv("AUTH_FAIL_GLOBAL_LIMIT", 50))
+AUTH_FAIL_GLOBAL_WINDOW_S = int(os.getenv("AUTH_FAIL_GLOBAL_WINDOW_S", 3600))
 
-    With no APP_ACCESS_TOKEN configured everyone is privileged, which is what
-    local dev and the test suite want. compare_digest, not ==, so a wrong token
-    cannot be recovered by timing.
+if APP_PASSWORD and len(APP_PASSWORD) < APP_PASSWORD_MIN_LEN:
+    # Refuse to boot rather than serve a short password: at 50 guesses an hour a
+    # three-word passphrase is out of reach, an eight-letter word is not.
+    raise RuntimeError(
+        f"APP_PASSWORD must be at least {APP_PASSWORD_MIN_LEN} characters; "
+        "use a few words, e.g. a passphrase."
+    )
+
+_auth_fails: dict[str, deque] = defaultdict(deque)
+_auth_global_fails: deque = deque()
+
+
+def _digest_eq(supplied: str, expected: str) -> bool:
+    """Constant-time compare that survives non-ASCII input.
+
+    compare_digest on two str objects raises TypeError for non-ASCII, which
+    turned a stray accented character in a token into a 500. Compare bytes.
+    """
+    return secrets.compare_digest(supplied.encode(), expected.encode())
+
+
+def _auth_lockout(ip: str) -> str | None:
+    """Is password checking suspended for this caller? Reason, or None."""
+    now = monotonic()
+    _prune(_auth_global_fails, now - AUTH_FAIL_GLOBAL_WINDOW_S)
+    if len(_auth_global_fails) >= AUTH_FAIL_GLOBAL_LIMIT:
+        return "password unlock is paused after too many wrong attempts; try again later"
+    log = _auth_fails.get(ip)   # .get: a lookup must not create an entry
+    if log is not None:
+        _prune(log, now - AUTH_FAIL_WINDOW_S)
+        if len(log) >= AUTH_FAIL_LIMIT:
+            return (
+                f"too many wrong passwords; try again in "
+                f"{AUTH_FAIL_WINDOW_S // 60} minutes"
+            )
+    return None
+
+
+def _check_credential(credential: str, ip: str) -> tuple[bool, str | None]:
+    """Resolve a supplied token-or-password to (privileged, auth_error).
+
+    auth_error is None for a caller who supplied nothing, so an anonymous
+    visitor is never told their (absent) password was wrong.
     """
     if not APP_ACCESS_TOKEN:
-        return True
-    return secrets.compare_digest(token, APP_ACCESS_TOKEN)
+        return True, None
+    if not credential:
+        return False, None
+    if _digest_eq(credential, APP_ACCESS_TOKEN):
+        return True, None
+    if not APP_PASSWORD:
+        return False, "wrong access token"
+    lockout = _auth_lockout(ip)
+    if lockout:
+        # Do not even compare: a locked-out caller learns nothing per guess.
+        return False, lockout
+    if _digest_eq(credential, APP_PASSWORD):
+        return True, None
+    now = monotonic()
+    # Same leak _sweep_stale_ip_windows closes for the anonymous windows: an IP
+    # that guesses once and leaves would keep its deque forever. Sweeping on
+    # every failure is cheap because the global ceiling bounds live entries.
+    _drop_expired_windows(_auth_fails, now - AUTH_FAIL_WINDOW_S)
+    _auth_fails[ip].append(now)
+    _auth_global_fails.append(now)
+    return False, "wrong password"
 
 
-def _enforce_access(request: Request) -> None:
+async def _enforce_access(request: Request) -> None:
     """Dependency on every endpoint that spends the Deepgram key.
 
     Privileged callers pass through untouched. Anonymous callers are allowed but
     metered, so the demo keeps working for a visitor with no token. Sets
-    request.state.privileged so handlers can pick the right per-request caps.
+    request.state.privileged so handlers can pick the right per-request caps,
+    and request.state.auth_error so the response can tell the page why a
+    supplied credential did not count (see _report_auth_error).
+
+    DO NOT make this a plain `def`. FastAPI runs sync dependencies in a thread
+    pool, so the check-then-append in the rate limiters and the password
+    failure counters would interleave and a parallel burst would overshoot
+    every limit. As a coroutine with no await inside, it runs atomically on the
+    event loop. (A threading.Lock is not the fix: app.py must stay free of
+    `threading`, see tests/test_streaming.py.)
     """
-    privileged = _is_privileged(_extract_token(request))
+    privileged, auth_error = _check_credential(
+        _extract_token(request), _client_ip(request)
+    )
     request.state.privileged = privileged
+    request.state.auth_error = auth_error
     if privileged:
         return
     if not ANON_ACCESS:
@@ -336,6 +455,44 @@ sio = socketio.AsyncServer(
 
 # 2. FastAPI sub-app for HTTP routes only
 fastapi_app = FastAPI()
+
+
+@fastapi_app.middleware("http")
+async def _report_auth_error(request: Request, call_next):
+    """Tell the page when the credential it sent did not count.
+
+    The socket reports this in access_tier, but only at connect. Without the
+    header, a page unlocked by password keeps showing "unlimited" while its HTTP
+    calls quietly fall to the anonymous limits (e.g. during a global password
+    lockout), and a stale wrong credential keeps burning failure budget. Set on
+    every response, 429 included, because request.state is shared via the scope.
+    """
+    response = await call_next(request)
+    auth_error = getattr(request.state, "auth_error", None)
+    if auth_error:
+        response.headers["X-Auth-Error"] = auth_error
+    return response
+
+
+class _RedactTokenFilter(logging.Filter):
+    """Strip ?token= values from uvicorn's access log.
+
+    <audio src="/files/...?token=..."> is the one place the credential has to
+    ride in a URL, and uvicorn logs full query strings by default, so without
+    this the token or the password lands in the Fly log on every file stream.
+    """
+    _TOKEN_RE = re.compile(r"(token=)[^&\s]*")
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        if isinstance(record.args, tuple):
+            record.args = tuple(
+                self._TOKEN_RE.sub(r"\1[redacted]", a) if isinstance(a, str) else a
+                for a in record.args
+            )
+        return True
+
+
+logging.getLogger("uvicorn.access").addFilter(_RedactTokenFilter())
 fastapi_app.mount("/static", StaticFiles(directory="static"), name="static")
 
 # 3. Combined ASGI callable — THIS is what uvicorn serves, not fastapi_app
@@ -1395,11 +1552,13 @@ async def connect(sid, environ, auth=None):
             environ.get("QUERY_STRING", "")
         ).get("token", [""])[0].strip()
 
-    privileged = _is_privileged(supplied)
+    privileged, auth_error = _check_credential(supplied, _environ_ip(environ))
     if not privileged:
         if not ANON_ACCESS:
             logger.warning("Refused SocketIO connect (token required): %s", sid)
-            raise socketio.exceptions.ConnectionRefusedError("access token required")
+            raise socketio.exceptions.ConnectionRefusedError(
+                auth_error or "access token required"
+            )
         anon_streams = sum(1 for s in _sessions.values() if not s.get("privileged"))
         if anon_streams >= ANON_MAX_CONCURRENT_STREAMS:
             logger.warning("Refused SocketIO connect (anon concurrency): %s", sid)
@@ -1409,9 +1568,12 @@ async def connect(sid, environ, auth=None):
 
     _socket_tiers[sid] = privileged
     logger.info("Client connected: %s privileged=%s", sid, privileged)
-    # Tell the client which tier it is in so the UI can show its budget.
+    # Tell the client which tier it is in so the UI can show its budget, and
+    # why a supplied credential did not unlock it.
     await sio.emit("access_tier", {
         "privileged": privileged,
+        "auth_error": auth_error,
+        "password_enabled": bool(APP_PASSWORD),
         "max_stream_seconds": None if privileged else ANON_MAX_STREAM_SECONDS,
         "max_tts_chars": MAX_TTS_CHARS if privileged else ANON_MAX_TTS_CHARS,
     }, to=sid)

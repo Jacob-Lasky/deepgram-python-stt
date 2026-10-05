@@ -122,6 +122,9 @@ whoever hits it, so these bound what a caller can do:
 | Variable | Default | Purpose |
 |----------|---------|---------|
 | `APP_ACCESS_TOKEN` | *(unset)* | Shared secret that LIFTS the anonymous limits. Unset means every caller is privileged, which is what local dev wants. |
+| `APP_PASSWORD` | *(unset)* | Optional human-memorable password, accepted anywhere the token is and typed into the page's **Unlock** box. At least 12 characters (use a passphrase); shorter refuses to boot. |
+| `AUTH_FAIL_LIMIT` / `AUTH_FAIL_WINDOW_S` | `5` / `900` | Wrong passwords per IP before password checks pause for that IP. |
+| `AUTH_FAIL_GLOBAL_LIMIT` / `AUTH_FAIL_GLOBAL_WINDOW_S` | `50` / `3600` | Wrong passwords across all callers before password unlock pauses for everyone. The token keeps working. |
 | `REQUIRE_AUTH` | *(unset)* | When true, the app refuses to boot without `APP_ACCESS_TOKEN`, so a deploy cannot silently come up with its limits disabled. Set to `true` in `fly.toml`. |
 | `ANON_ACCESS` | `true` | Set false to require a token outright. Leaving it true is the point: the demo has to work for a visitor. |
 | `ANON_RATE_LIMIT` / `ANON_RATE_WINDOW_S` | `15` / `300` | Per-IP request budget. |
@@ -180,7 +183,17 @@ Scripts in `scripts/` read `APP_ACCESS_TOKEN` from the environment.
 
 ```bash
 fly secrets set APP_ACCESS_TOKEN="$(openssl rand -hex 24)"
+fly secrets set APP_PASSWORD="some words you will remember"   # optional
 ```
+
+**Or type a password instead of building a link.** With `APP_PASSWORD` set, the
+anonymous banner carries an **Unlock** box that takes the password (or the
+token), stores it in `sessionStorage` like a `?token=` link would, and
+re-handshakes the socket; a wrong entry is reported beside the box and
+forgotten. Because a memorable password is guessable where 48 hex characters are
+not, wrong passwords are rate-limited per IP and globally, and a locked-out
+caller's guesses are not even compared. The token is never rate-limited, so it
+is the recovery path if a flood of guesses pauses password unlock.
 
 **Rate-limit state is in-process, which is correct here:** `fly.toml` pins the
 app to a single machine with a single worker because python-socketio keeps
