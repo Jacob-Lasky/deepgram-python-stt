@@ -188,6 +188,12 @@ def test_require_auth_with_a_token_starts_cleanly():
     assert proc.returncode == 0, proc.stderr
 
 
+def _enforce(req):
+    """_enforce_access is a coroutine on purpose (see its docstring)."""
+    import asyncio
+    return asyncio.run(app._enforce_access(req))
+
+
 class _FakeRequest:
     """Minimal stand-in for starlette Request: headers, query_params, state."""
 
@@ -204,11 +210,11 @@ class _FakeRequest:
 @pytest.fixture(autouse=True)
 def _reset_rate_limits():
     """Rate-limit state is module-global; a leaked window breaks later tests."""
-    app._anon_hits.clear()
-    app._anon_global_hits.clear()
+    for log in (app._anon_hits, app._anon_global_hits, app._auth_fails, app._auth_global_fails):
+        log.clear()
     yield
-    app._anon_hits.clear()
-    app._anon_global_hits.clear()
+    for log in (app._anon_hits, app._anon_global_hits, app._auth_fails, app._auth_global_fails):
+        log.clear()
 
 
 def test_everyone_is_privileged_when_no_token_is_configured(monkeypatch):
@@ -219,10 +225,10 @@ def test_everyone_is_privileged_when_no_token_is_configured(monkeypatch):
     gitignored .env would fail this test for no real reason. Pin the value.
     """
     monkeypatch.setattr(app, "APP_ACCESS_TOKEN", "")
-    assert app._is_privileged("") is True
-    assert app._is_privileged("anything") is True
+    assert app._check_credential("", "198.51.100.1") == (True, None)
+    assert app._check_credential("anything", "198.51.100.1") == (True, None)
     req = _FakeRequest()
-    assert app._enforce_access(req) is None
+    assert _enforce(req) is None
     assert req.state.privileged is True
 
 
@@ -235,7 +241,7 @@ def test_everyone_is_privileged_when_no_token_is_configured(monkeypatch):
 def test_a_valid_token_is_privileged(monkeypatch, headers, query):
     monkeypatch.setattr(app, "APP_ACCESS_TOKEN", "right-token")
     req = _FakeRequest(headers, query)
-    assert app._enforce_access(req) is None
+    assert _enforce(req) is None
     assert req.state.privileged is True
 
 
@@ -249,7 +255,7 @@ def test_no_token_still_works_but_unprivileged(monkeypatch, headers, query):
     """The demo must keep working for a visitor with no token."""
     monkeypatch.setattr(app, "APP_ACCESS_TOKEN", "right-token")
     req = _FakeRequest(headers, query)
-    assert app._enforce_access(req) is None, "anonymous access must be allowed"
+    assert _enforce(req) is None, "anonymous access must be allowed"
     assert req.state.privileged is False
 
 
@@ -257,7 +263,7 @@ def test_anon_access_can_be_switched_off_entirely(monkeypatch):
     monkeypatch.setattr(app, "APP_ACCESS_TOKEN", "right-token")
     monkeypatch.setattr(app, "ANON_ACCESS", False)
     with pytest.raises(HTTPException) as exc:
-        app._enforce_access(_FakeRequest())
+        _enforce(_FakeRequest())
     assert exc.value.status_code == 401
 
 
@@ -265,9 +271,9 @@ def test_anon_per_ip_rate_limit_returns_429(monkeypatch):
     monkeypatch.setattr(app, "APP_ACCESS_TOKEN", "right-token")
     monkeypatch.setattr(app, "ANON_RATE_LIMIT", 3)
     for _ in range(3):
-        assert app._enforce_access(_FakeRequest(client_ip="198.51.100.7")) is None
+        assert _enforce(_FakeRequest(client_ip="198.51.100.7")) is None
     with pytest.raises(HTTPException) as exc:
-        app._enforce_access(_FakeRequest(client_ip="198.51.100.7"))
+        _enforce(_FakeRequest(client_ip="198.51.100.7"))
     assert exc.value.status_code == 429
     assert "rate limit" in exc.value.detail
 
@@ -276,8 +282,8 @@ def test_a_second_ip_has_its_own_per_ip_budget(monkeypatch):
     monkeypatch.setattr(app, "APP_ACCESS_TOKEN", "right-token")
     monkeypatch.setattr(app, "ANON_RATE_LIMIT", 2)
     for _ in range(2):
-        app._enforce_access(_FakeRequest(client_ip="198.51.100.1"))
-    assert app._enforce_access(_FakeRequest(client_ip="198.51.100.2")) is None
+        _enforce(_FakeRequest(client_ip="198.51.100.1"))
+    assert _enforce(_FakeRequest(client_ip="198.51.100.2")) is None
 
 
 def test_global_ceiling_stops_a_distributed_attempt(monkeypatch):
@@ -286,9 +292,9 @@ def test_global_ceiling_stops_a_distributed_attempt(monkeypatch):
     monkeypatch.setattr(app, "ANON_RATE_LIMIT", 1000)   # per-IP out of the way
     monkeypatch.setattr(app, "ANON_GLOBAL_LIMIT", 5)
     for i in range(5):
-        assert app._enforce_access(_FakeRequest(client_ip=f"198.51.100.{i}")) is None
+        assert _enforce(_FakeRequest(client_ip=f"198.51.100.{i}")) is None
     with pytest.raises(HTTPException) as exc:
-        app._enforce_access(_FakeRequest(client_ip="198.51.100.200"))
+        _enforce(_FakeRequest(client_ip="198.51.100.200"))
     assert exc.value.status_code == 429
     assert "shared hourly limit" in exc.value.detail
 
@@ -299,7 +305,7 @@ def test_a_privileged_caller_is_never_rate_limited(monkeypatch):
     monkeypatch.setattr(app, "ANON_GLOBAL_LIMIT", 1)
     for _ in range(20):
         req = _FakeRequest({"x-app-token": "right-token"})
-        assert app._enforce_access(req) is None
+        assert _enforce(req) is None
         assert req.state.privileged is True
     # A privileged caller must not consume the anonymous budget either.
     assert len(app._anon_global_hits) == 0
@@ -310,11 +316,11 @@ def test_a_refused_request_is_not_charged(monkeypatch):
     monkeypatch.setattr(app, "APP_ACCESS_TOKEN", "right-token")
     monkeypatch.setattr(app, "ANON_RATE_LIMIT", 2)
     for _ in range(2):
-        app._enforce_access(_FakeRequest(client_ip="198.51.100.5"))
+        _enforce(_FakeRequest(client_ip="198.51.100.5"))
     before = len(app._anon_global_hits)
     for _ in range(5):
         with pytest.raises(HTTPException):
-            app._enforce_access(_FakeRequest(client_ip="198.51.100.5"))
+            _enforce(_FakeRequest(client_ip="198.51.100.5"))
     assert len(app._anon_global_hits) == before
 
 
@@ -330,7 +336,7 @@ def test_stale_per_ip_windows_are_swept(monkeypatch):
     monkeypatch.setattr(app, "_SWEEP_EVERY", 10)
     monkeypatch.setattr(app, "_sweep_countdown", 10)
     for i in range(200):
-        app._enforce_access(_FakeRequest(client_ip=f"198.51.100.{i % 250}"))
+        _enforce(_FakeRequest(client_ip=f"198.51.100.{i % 250}"))
     assert len(app._anon_hits) <= 10, f"leaked {len(app._anon_hits)} per-IP windows"
 
 
@@ -372,7 +378,7 @@ def test_socketio_connect_is_metered_too():
     """Mic streaming spends the key over the socket, so it is API surface."""
     src = (Path(__file__).resolve().parents[1] / "app.py").read_text()
     connect = src.split("async def connect(")[1].split("async def disconnect")[0]
-    assert "_is_privileged" in connect, "connect does not resolve a tier"
+    assert "_check_credential" in connect, "connect does not resolve a tier"
     assert "ANON_MAX_CONCURRENT_STREAMS" in connect, "connect does not cap anon concurrency"
     assert "ConnectionRefusedError" in connect, "connect cannot refuse"
 
@@ -387,8 +393,10 @@ def test_anon_streams_have_a_wall_clock_cap():
 
 def test_token_comparison_is_constant_time():
     src = (Path(__file__).resolve().parents[1] / "app.py").read_text()
-    body = src.split("def _is_privileged(")[1].split("\ndef ")[0]
-    assert "compare_digest" in body, "use secrets.compare_digest, not =="
+    check = src.split("def _check_credential(")[1].split("\ndef ")[0]
+    assert "_digest_eq(" in check and "==" not in check, "compare through _digest_eq, not =="
+    digest = src.split("def _digest_eq(")[1].split("\ndef ")[0]
+    assert "compare_digest" in digest, "use secrets.compare_digest, not =="
 
 
 def test_socket_tier_map_is_cleaned_up_on_disconnect():
@@ -454,3 +462,198 @@ async def test_remote_audio_size_allows_a_small_file(monkeypatch):
 
     monkeypatch.setattr(app.httpx, "AsyncClient", lambda **kw: _Client())
     assert await app._check_remote_audio_size("https://x.test/a.wav", 1000) is None
+
+
+# --- APP_PASSWORD: the typeable credential, and the limits that make it safe ---
+
+IP = "198.51.100.40"
+
+
+@pytest.fixture
+def _password(monkeypatch):
+    monkeypatch.setattr(app, "APP_ACCESS_TOKEN", "right-token")
+    monkeypatch.setattr(app, "APP_PASSWORD", "purple otter lantern")
+    monkeypatch.setattr(app, "AUTH_FAIL_LIMIT", 3)
+    monkeypatch.setattr(app, "AUTH_FAIL_GLOBAL_LIMIT", 10)
+
+
+def test_password_unlocks_like_the_token(_password):
+    assert app._check_credential("purple otter lantern", IP) == (True, None)
+    req = _FakeRequest({"x-app-token": "purple otter lantern"})
+    assert _enforce(req) is None
+    assert req.state.privileged is True
+
+
+def test_no_credential_is_anonymous_without_an_error(_password):
+    """An anonymous visitor must not be told their absent password was wrong."""
+    assert app._check_credential("", IP) == (False, None)
+
+
+def test_wrong_password_is_reported_and_counted(_password):
+    assert app._check_credential("guess", IP) == (False, "wrong password")
+    assert len(app._auth_fails[IP]) == 1
+
+
+def test_wrong_credential_without_a_password_says_token(monkeypatch):
+    monkeypatch.setattr(app, "APP_ACCESS_TOKEN", "right-token")
+    monkeypatch.setattr(app, "APP_PASSWORD", "")
+    assert app._check_credential("guess", IP) == (False, "wrong access token")
+
+
+def test_per_ip_lockout_stops_even_the_right_password(_password):
+    """Once locked, guesses are not compared, so a guesser learns nothing."""
+    for _ in range(3):
+        app._check_credential("guess", IP)
+    privileged, err = app._check_credential("purple otter lantern", IP)
+    assert privileged is False
+    assert "too many wrong passwords" in err
+    # Another IP is unaffected.
+    assert app._check_credential("purple otter lantern", "198.51.100.41") == (True, None)
+
+
+def test_global_lockout_stops_a_distributed_guesser(_password):
+    for i in range(10):
+        app._check_credential("guess", f"203.0.113.{i}")
+    privileged, err = app._check_credential("purple otter lantern", "203.0.113.200")
+    assert privileged is False and "paused" in err
+
+
+def test_token_still_works_during_a_lockout(_password):
+    """The token is the recovery path when the password is locked out."""
+    for i in range(10):
+        app._check_credential("guess", f"203.0.113.{i}")
+    assert app._check_credential("right-token", "203.0.113.1") == (True, None)
+
+
+def test_token_guesses_are_not_counted_without_a_password(monkeypatch):
+    """The 48-hex token is unguessable; only the password needs a guess budget."""
+    monkeypatch.setattr(app, "APP_ACCESS_TOKEN", "right-token")
+    monkeypatch.setattr(app, "APP_PASSWORD", "")
+    for _ in range(20):
+        app._check_credential("guess", IP)
+    assert not app._auth_fails and not app._auth_global_fails
+
+
+def test_non_ascii_credential_is_refused_not_a_500(_password):
+    """compare_digest raises TypeError on non-ASCII str; we compare bytes."""
+    assert app._check_credential("contraseña-ñ", IP) == (False, "wrong password")
+    req = _FakeRequest({"x-app-token": "jalapeño"})
+    assert _enforce(req) is None
+    assert req.state.privileged is False
+
+
+def test_short_password_is_a_hard_error():
+    import subprocess, sys
+    env = {
+        **os.environ,
+        "APP_PASSWORD": "short",
+        "APP_ACCESS_TOKEN": "a-token",
+        "DEEPGRAM_API_KEY": "test-key",
+        "PYTHONPATH": str(Path(__file__).resolve().parents[1]),
+    }
+    proc = subprocess.run(
+        [sys.executable, "-c", "import app"],
+        cwd=Path(__file__).resolve().parents[1], env=env,
+        capture_output=True, text=True,
+    )
+    assert proc.returncode != 0
+    assert "APP_PASSWORD must be at least" in proc.stderr
+
+
+def test_expired_password_failures_are_swept(_password, monkeypatch):
+    """An IP that guessed once and left must not stay in memory forever."""
+    clock = [1000.0]
+    monkeypatch.setattr(app, "monotonic", lambda: clock[0])
+    app._check_credential("guess", "198.51.100.50")
+    clock[0] += app.AUTH_FAIL_WINDOW_S + 1
+    app._check_credential("guess", "198.51.100.51")
+    assert "198.51.100.50" not in app._auth_fails
+    assert "198.51.100.51" in app._auth_fails
+
+
+def test_a_lockout_lookup_does_not_create_an_entry(_password):
+    app._check_credential("purple otter lantern", "198.51.100.60")
+    assert "198.51.100.60" not in app._auth_fails
+
+
+def test_environ_ip_prefers_the_fly_header():
+    scope = {"client": ("10.0.0.1", 5555)}
+    environ = {"HTTP_FLY_CLIENT_IP": "198.51.100.9", "asgi.scope": scope}
+    assert app._environ_ip(environ) == "198.51.100.9"
+
+
+def test_environ_ip_ignores_engineios_fake_remote_addr():
+    """engineio hardcodes REMOTE_ADDR=127.0.0.1; trusting it shares one bucket."""
+    environ = {"REMOTE_ADDR": "127.0.0.1", "asgi.scope": {"client": ("10.0.0.7", 1)}}
+    assert app._environ_ip(environ) == "10.0.0.7"
+
+
+def test_access_dependency_is_a_coroutine():
+    """A sync dependency runs in FastAPI's thread pool and the limiters race."""
+    import inspect
+    assert inspect.iscoroutinefunction(app._enforce_access)
+
+
+def test_parallel_wrong_passwords_cannot_overshoot_the_limit(_password, monkeypatch):
+    """Codex reproduced two guesses passing a limit of one via the thread pool."""
+    import asyncio
+    monkeypatch.setattr(app, "AUTH_FAIL_GLOBAL_LIMIT", 1)
+
+    async def burst():
+        reqs = [_FakeRequest({"x-app-token": "guess"}, client_ip=f"203.0.113.{i}") for i in range(20)]
+        await asyncio.gather(*(app._enforce_access(r) for r in reqs))
+        return reqs
+
+    reqs = asyncio.run(burst())
+    assert len(app._auth_global_fails) == 1
+    assert sum(r.state.auth_error == "wrong password" for r in reqs) == 1
+
+
+def test_access_log_redacts_the_token():
+    import logging
+    rec = logging.LogRecord("uvicorn.access", logging.INFO, "", 0, '%s - "%s %s"', (
+        "1.2.3.4", "GET", "/files/a.wav?token=purple%20otter%20lantern&x=1"), None)
+    assert app._RedactTokenFilter().filter(rec) is True
+    assert "purple" not in rec.getMessage()
+    assert "token=[redacted]&x=1" in rec.getMessage()
+    assert any(isinstance(f, app._RedactTokenFilter)
+               for f in logging.getLogger("uvicorn.access").filters)
+
+
+async def test_http_response_reports_a_rejected_credential(server, _password):
+    """The page learns its HTTP credential stopped counting from this header."""
+    import httpx
+    from tests.conftest import BASE_URL
+    async with httpx.AsyncClient() as c:
+        bad = await c.get(f"{BASE_URL}/files/nope.wav", headers={"X-App-Token": "guess"})
+        good = await c.get(f"{BASE_URL}/files/nope.wav",
+                           headers={"X-App-Token": "purple otter lantern"})
+        none = await c.get(f"{BASE_URL}/files/nope.wav")
+    assert bad.headers.get("x-auth-error") == "wrong password"
+    assert "x-auth-error" not in good.headers
+    assert "x-auth-error" not in none.headers
+
+
+@pytest.mark.parametrize("supplied,privileged,error", [
+    ("purple otter lantern", True, None),
+    ("guess", False, "wrong password"),
+    ("", False, None),
+])
+async def test_socket_connect_reports_the_credential_verdict(server, _password, supplied, privileged, error):
+    """The UI's unlock box learns the outcome from access_tier, over a real socket."""
+    import asyncio
+    import socketio
+    from tests.conftest import BASE_URL
+
+    got = asyncio.get_running_loop().create_future()
+    client = socketio.AsyncClient()
+    client.on("access_tier", lambda data: got.done() or got.set_result(data))
+    await client.connect(BASE_URL, transports=["websocket"], auth={"token": supplied})
+    try:
+        data = await asyncio.wait_for(got, 5)
+    finally:
+        await client.disconnect()
+        await client.wait()
+    assert data["privileged"] is privileged
+    assert data["auth_error"] == error
+    assert data["password_enabled"] is True

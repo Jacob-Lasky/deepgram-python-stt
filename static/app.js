@@ -12,8 +12,17 @@ function appData() {
     // Access tier, reported by the server on connect. Anonymous visitors get a
     // working app under limits; a token lifts them. Rendered as a banner so a
     // visitor who hits a limit sees why instead of a silently broken page.
-    tier: { known: false, privileged: false, maxStreamSeconds: null, maxTtsChars: null },
+    tier: { known: false, privileged: false, maxStreamSeconds: null, maxTtsChars: null, passwordEnabled: false },
     limitNotice: '',       // set when a limit is actually hit
+    // Unlock box: a password (or the token) typed into the banner instead of
+    // pasted into a ?token= URL. authError is the server's verdict on the last
+    // credential tried, shown beside the box.
+    unlockInput: '',
+    authError: '',
+    // True from stream_started until stream_finished/stream_error/disconnect.
+    // Unlock reconnects the socket, and the server cancels a stream on
+    // disconnect, so a stream that is stopping but not finished still counts.
+    streamActive: false,
 
     mode: 'mic',         // 'mic' | 'file' | 'batch' | 'tts'
     rightTab: 'transcript',
@@ -533,8 +542,7 @@ function appData() {
     _loadToken() {
       const fromUrl = new URLSearchParams(window.location.search).get('token');
       if (fromUrl) {
-        this.apiToken = fromUrl.trim();
-        sessionStorage.setItem('sttApiToken', this.apiToken);
+        this._setToken(fromUrl);
         // Drop the token out of the visible URL so it does not end up in a
         // screenshot or a copied link by accident. sessionStorage still has it.
         const url = new URL(window.location.href);
@@ -543,6 +551,50 @@ function appData() {
       } else {
         this.apiToken = (sessionStorage.getItem('sttApiToken') || '').trim();
       }
+    },
+
+    // The ONE writer of the credential. socket.auth is updated here too: it is
+    // what socket.io resends on every automatic reconnect, so a copy left there
+    // would replay a rejected password and burn failure budget on its own.
+    _setToken(value) {
+      this.apiToken = (value || '').trim();
+      if (this.apiToken) sessionStorage.setItem('sttApiToken', this.apiToken);
+      else sessionStorage.removeItem('sttApiToken');
+      if (this.socket) this.socket.auth = { token: this.apiToken };
+    },
+
+    // A credential the server rejected (wrong, or password checks paused) is
+    // forgotten and the page drops back to the anonymous tier and its unlock box.
+    // fromHttp: the verdict came on an HTTP response, so this.tier still holds
+    // the old tier's limits. The anonymous ones only arrive in access_tier, so
+    // re-handshake to fetch them, unless that would cancel a live stream; until
+    // then the banner hides the limits sentence rather than print stale ones.
+    _rejectCredential(reason, fromHttp) {
+      this.authError = reason;
+      this._setToken('');
+      if (!fromHttp) return;
+      this.tier = { ...this.tier, privileged: false, maxStreamSeconds: null, maxTtsChars: null };
+      if (this.socket && !this.streamBusy) {
+        this.socket.disconnect();
+        this.socket.connect();
+      }
+    },
+
+    get streamBusy() {
+      return this.recording || this.streamActive || this.fileStreamState === 'streaming';
+    },
+
+    // Re-handshake with the typed credential. The tier is resolved at connect,
+    // so a reconnect is the only way the socket picks it up; access_tier then
+    // reports success or why not.
+    unlock() {
+      const value = this.unlockInput.trim();
+      if (!value || this.streamBusy) return;
+      this._setToken(value);
+      this.unlockInput = '';
+      this.authError = '';
+      this.socket.disconnect();
+      this.socket.connect();
     },
 
     _authHeaders(extra) {
@@ -563,6 +615,8 @@ function appData() {
       const opts = Object.assign({}, options || {});
       opts.headers = this._authHeaders(opts.headers);
       const res = await fetch(path, opts);
+      const authError = res.headers.get('X-Auth-Error');
+      if (authError && this.apiToken) this._rejectCredential(authError, true);
       if (res.status === 401 || res.status === 429) {
         let detail = '';
         try { detail = (await res.clone().json()).detail || ''; } catch (e) { /* non-JSON body */ }
@@ -581,6 +635,11 @@ function appData() {
       this.socket.on('connect_error', (err) => {
         this.connected = false;
         const msg = String((err && err.message) || '');
+        // A refused connect never emits access_tier. Mark the tier known and
+        // anonymous anyway, or with ANON_ACCESS off the unlock box (the only
+        // way in) would never render.
+        this.tier.known = true;
+        this.tier.privileged = false;
         // The server refuses a connect for a reason worth showing verbatim:
         // token required, or the demo's concurrent-stream cap.
         if (msg) {
@@ -595,7 +654,19 @@ function appData() {
           privileged: !!data.privileged,
           maxStreamSeconds: data.max_stream_seconds,
           maxTtsChars: data.max_tts_chars,
+          passwordEnabled: !!data.password_enabled,
         };
+        // An anonymous verdict with no error keeps the last message: it is
+        // the re-handshake that follows a rejection, and erasing "wrong
+        // password" there would hide why the page relocked.
+        if (this.tier.privileged) {
+          this.limitNotice = '';
+          this.authError = '';
+        } else if (data.auth_error) {
+          // Every HTTP call carries the credential, and each one would count
+          // as another wrong guess toward the lockout.
+          this._rejectCredential(data.auth_error);
+        }
       });
 
       this.socket.on('stream_limit_reached', (data) => {
@@ -611,6 +682,7 @@ function appData() {
       this.socket.on('disconnect', () => {
         this.connected = false;
         this.recording = false;
+        this.streamActive = false;
         if (this.fileStreamState === 'streaming') this.fileStreamState = 'idle';
       });
 
@@ -619,6 +691,7 @@ function appData() {
       });
 
       this.socket.on('stream_started', (data) => {
+        this.streamActive = true;
         this.streamUrl = data.url || '';
         if (this.fileStreamState === 'idle') this.fileStreamState = 'streaming';
         // Flush any audio buffered before the connection was ready
@@ -630,6 +703,7 @@ function appData() {
       });
 
       this.socket.on('stream_finished', () => {
+        this.streamActive = false;
         this.streamUrl = '';
         this.recording = false;
         if (this.fileStreamState === 'streaming') this.fileStreamState = 'done';
@@ -647,6 +721,7 @@ function appData() {
         this._streamReady = false;
         this._pendingAudio = [];
         this.streamUrl = '';
+        this.streamActive = false;
         this.fileStreamState = 'error';
         this.recording = false;
         this.showToast(data.message || 'Stream error', 'error');
