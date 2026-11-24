@@ -1,23 +1,27 @@
 <!DOCTYPE html>
-<html lang="en">
+<html lang="en" data-theme="dark">
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>Deepgram STT Explorer</title>
-  <link rel="stylesheet" href="https://unpkg.com/@deepgram/styles/dist/deepgram.css">
+  <title>Deepgram STT explorer</title>
+  <link rel="icon" href="/static/vdui/logos/deepgram-favicon.svg" type="image/svg+xml">
+  <!-- Deepgram brand UI kit (static/vdui): tokens, fonts, and utilities, in its dark theme.
+       The page's own styles below use only its variables. -->
+  <link rel="stylesheet" href="/static/vdui/brand.css">
   <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.2/css/all.min.css">
   <script src="https://cdn.socket.io/4.6.0/socket.io.min.js"></script>
   <script defer src="https://cdn.jsdelivr.net/npm/alpinejs@3.13.5/dist/cdn.min.js"></script>
   <script src="/static/app.js"></script>
   <style>
     *, *::before, *::after { box-sizing: border-box; }
+    button, input, select, textarea { font-family: inherit; }
 
     html, body {
       margin: 0; padding: 0;
       height: 100%;
-      background: #0a0a0a;
-      color: #e5e7eb;
-      font-family: -apple-system, BlinkMacSystemFont, 'Inter', 'Segoe UI', sans-serif;
+      background: var(--color-paper);
+      color: var(--color-fg);
+      font-family: var(--font-sans);
       font-size: 14px;
       overflow: hidden;
     }
@@ -33,7 +37,7 @@
       width: 380px;
       flex-shrink: 0;
       height: 100vh;
-      border-right: 1px solid #1f2937;
+      border-right: 1px solid var(--color-line);
       overflow-y: auto;
     }
 
@@ -46,7 +50,7 @@
 
     .left-panel-inner::-webkit-scrollbar { width: 5px; }
     .left-panel-inner::-webkit-scrollbar-track { background: transparent; }
-    .left-panel-inner::-webkit-scrollbar-thumb { background: #374151; border-radius: 3px; }
+    .left-panel-inner::-webkit-scrollbar-thumb { background: var(--color-ink-3); border-radius: 3px; }
 
     .right-panel {
       flex: 1;
@@ -62,14 +66,14 @@
       align-items: center;
       gap: 8px;
       padding: 8px 12px;
-      background: #0f172a;
-      border-bottom: 1px solid #1f2937;
+      background: var(--color-paper);
+      border-bottom: 1px solid var(--color-line);
       flex-shrink: 0;
     }
 
     .url-scheme {
-      color: #6b7280;
-      font-family: monospace;
+      color: var(--color-muted);
+      font-family: var(--font-mono);
       font-size: 12px;
       white-space: nowrap;
       flex-shrink: 0;
@@ -77,37 +81,37 @@
 
     .url-input {
       flex: 1;
-      background: #1a1f2e;
-      border: 1px solid #2d3748;
+      background: var(--color-paper);
+      border: 1px solid var(--color-ink-3);
       border-radius: 6px;
-      color: #13ef95;
-      font-family: monospace;
+      color: var(--color-lime);
+      font-family: var(--font-mono);
       font-size: 12px;
       padding: 6px 10px;
       outline: none;
       transition: border-color 0.2s;
     }
-    .url-input:focus { border-color: #13ef95; }
+    .url-input:focus { border-color: var(--color-magenta); }
 
     .url-copy-btn {
-      background: #1a1f2e;
-      border: 1px solid #2d3748;
+      background: var(--color-paper);
+      border: 1px solid var(--color-ink-3);
       border-radius: 6px;
-      color: #9ca3af;
+      color: var(--color-muted);
       padding: 6px 10px;
       cursor: pointer;
       font-size: 12px;
       white-space: nowrap;
       transition: all 0.2s;
     }
-    .url-copy-btn:hover { background: #2d3748; color: #e5e7eb; }
-    .url-copy-btn.copied { color: #13ef95; border-color: #13ef95; }
+    .url-copy-btn:hover { background: var(--color-ink-3); color: var(--color-fg); }
+    .url-copy-btn.copied { color: var(--color-lime); border-color: var(--color-lime); }
 
     /* ---- Mode tabs ---- */
     .mode-tabs {
       display: flex;
-      background: #111827;
-      border: 1px solid #1f2937;
+      background: var(--color-card);
+      border: 1px solid var(--color-line);
       border-radius: 8px;
       padding: 3px;
       gap: 2px;
@@ -119,7 +123,7 @@
       background: transparent;
       border: none;
       border-radius: 6px;
-      color: #6b7280;
+      color: var(--color-muted);
       font-size: 12px;
       font-weight: 500;
       cursor: pointer;
@@ -127,15 +131,15 @@
       text-align: center;
     }
     .mode-tab.active {
-      background: #1e293b;
-      color: #e5e7eb;
+      background: var(--color-ink-2);
+      color: var(--color-fg);
     }
-    .mode-tab:hover:not(.active) { color: #9ca3af; }
+    .mode-tab:hover:not(.active) { color: var(--color-muted); }
 
     /* ---- Input controls ---- */
     .input-section {
-      background: #111827;
-      border: 1px solid #1f2937;
+      background: var(--color-card);
+      border: 1px solid var(--color-line);
       border-radius: 8px;
       overflow: hidden;
     }
@@ -146,8 +150,9 @@
       font-weight: 600;
       text-transform: uppercase;
       letter-spacing: 0.08em;
-      color: #6b7280;
-      border-bottom: 1px solid #1f2937;
+      font-family: var(--font-mono);
+      color: var(--color-muted);
+      border-bottom: 1px solid var(--color-line);
     }
 
     .input-section-body { padding: 12px; }
@@ -161,70 +166,75 @@
 
     .source-input {
       flex: 1;
-      background: #1a1f2e;
-      border: 1px solid #2d3748;
+      background: var(--color-paper);
+      border: 1px solid var(--color-ink-3);
       border-radius: 6px;
-      color: #e5e7eb;
-      font-family: monospace;
+      color: var(--color-fg);
+      font-family: var(--font-mono);
       font-size: 12px;
       padding: 6px 10px;
       outline: none;
       transition: border-color 0.2s;
     }
-    .source-input:focus { border-color: #4b5563; }
-    .source-input::placeholder { color: #374151; }
+    .source-input:focus { border-color: var(--color-magenta); }
+    .source-input::placeholder { color: var(--color-faint); }
 
     .action-btn {
       display: flex;
       align-items: center;
       justify-content: center;
       gap: 6px;
-      padding: 7px 14px;
+      padding: 8px 14px;
       border: none;
-      border-radius: 6px;
-      font-size: 12px;
-      font-weight: 600;
+      border-radius: 999px;
+      font-family: var(--font-mono);
+      font-size: 11px;
+      font-weight: 500;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
       cursor: pointer;
       transition: all 0.2s;
       white-space: nowrap;
     }
 
     .btn-primary {
-      background: #13ef95;
-      color: #0a0a0a;
+      background: var(--color-magenta);
+      color: var(--color-ink);
     }
-    .btn-primary:hover { background: #0fd484; }
-    .btn-primary:disabled { background: #1f2937; color: #6b7280; cursor: not-allowed; }
+    .btn-primary:hover { filter: brightness(1.1); }
+    /* A selected chip (TTS language, STT mode): the kit's fg chip, so magenta stays the one action */
+    .btn-selected { background: var(--color-fg); color: var(--color-paper); }
+    .btn-primary:disabled { background: var(--color-line); color: var(--color-muted); cursor: not-allowed; }
 
     .btn-danger {
-      background: #ef4444;
-      color: #fff;
+      background: var(--color-red);
+      color: var(--color-paper);
     }
-    .btn-danger:hover { background: #dc2626; }
+    .btn-danger:hover { filter: brightness(1.1); }
 
     .btn-secondary {
-      background: #1e293b;
-      border: 1px solid #2d3748;
-      color: #9ca3af;
+      background: var(--color-ink-2);
+      border: 1px solid var(--color-ink-3);
+      color: var(--color-muted);
     }
-    .btn-secondary:hover { background: #2d3748; color: #e5e7eb; }
+    .btn-secondary:hover { background: var(--color-ink-3); color: var(--color-fg); }
 
     .btn-sm { padding: 5px 10px; font-size: 11px; }
 
     .upload-zone {
-      border: 2px dashed #2d3748;
+      border: 2px dashed var(--color-ink-3);
       border-radius: 8px;
       padding: 16px;
       text-align: center;
       cursor: pointer;
       transition: all 0.2s;
-      color: #6b7280;
+      color: var(--color-muted);
       font-size: 12px;
     }
     .upload-zone:hover, .upload-zone.drag-over {
-      border-color: #13ef95;
-      background: rgba(19, 239, 149, 0.05);
-      color: #13ef95;
+      border-color: var(--color-fg);
+      background: color-mix(in srgb, var(--color-fg) 4%, transparent);
+      color: var(--color-fg);
     }
     .upload-zone i { font-size: 20px; display: block; margin-bottom: 6px; }
 
@@ -233,13 +243,13 @@
       align-items: center;
       gap: 8px;
       padding: 8px 10px;
-      background: #1a1f2e;
-      border: 1px solid #2d3748;
+      background: var(--color-paper);
+      border: 1px solid var(--color-ink-3);
       border-radius: 6px;
       font-size: 12px;
-      color: #9ca3af;
+      color: var(--color-muted);
     }
-    .uploaded-file i { color: #13ef95; }
+    .uploaded-file i { color: var(--color-lime); }
     .uploaded-file .file-name { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
     .mic-btn {
@@ -248,13 +258,13 @@
       font-size: 14px;
     }
     .mic-btn.recording {
-      background: #ef4444;
-      color: #fff;
+      background: var(--color-red);
+      color: var(--color-paper);
       animation: pulse 1.5s infinite;
     }
     @keyframes pulse {
-      0%, 100% { box-shadow: 0 0 0 0 rgba(239,68,68,0.4); }
-      50% { box-shadow: 0 0 0 8px rgba(239,68,68,0); }
+      0%, 100% { box-shadow: 0 0 0 0 color-mix(in srgb, var(--color-red) 40%, transparent); }
+      50% { box-shadow: 0 0 0 8px transparent; }
     }
 
     .status-dot {
@@ -264,15 +274,15 @@
       border-radius: 50%;
       margin-right: 4px;
     }
-    .status-dot.connected { background: #13ef95; }
-    .status-dot.disconnected { background: #ef4444; }
-    .status-dot.streaming { background: #f59e0b; animation: blink 1s infinite; }
+    .status-dot.connected { background: var(--color-lime); }
+    .status-dot.disconnected { background: var(--color-red); }
+    .status-dot.streaming { background: var(--color-orange); animation: blink 1s infinite; }
     @keyframes blink { 0%, 100% { opacity: 1; } 50% { opacity: 0.3; } }
 
     /* ---- Import/Export ---- */
     .import-export-section {
-      background: #111827;
-      border: 1px solid #1f2937;
+      background: var(--color-card);
+      border: 1px solid var(--color-line);
       border-radius: 8px;
       overflow: hidden;
     }
@@ -286,14 +296,15 @@
       user-select: none;
       border-bottom: 1px solid transparent;
     }
-    .import-export-header.open { border-bottom-color: #1f2937; }
+    .import-export-header.open { border-bottom-color: var(--color-line); }
 
     .import-export-title {
       font-size: 11px;
       font-weight: 600;
       text-transform: uppercase;
       letter-spacing: 0.08em;
-      color: #6b7280;
+      font-family: var(--font-mono);
+      color: var(--color-muted);
     }
 
     .import-export-body {
@@ -302,11 +313,11 @@
 
     .import-textarea {
       width: 100%;
-      background: #1a1f2e;
-      border: 1px solid #2d3748;
+      background: var(--color-paper);
+      border: 1px solid var(--color-ink-3);
       border-radius: 6px;
-      color: #e5e7eb;
-      font-family: monospace;
+      color: var(--color-fg);
+      font-family: var(--font-mono);
       font-size: 11px;
       padding: 8px;
       resize: vertical;
@@ -314,8 +325,8 @@
       outline: none;
       transition: border-color 0.2s;
     }
-    .import-textarea:focus { border-color: #4b5563; }
-    .import-textarea::placeholder { color: #374151; }
+    .import-textarea:focus { border-color: var(--color-magenta); }
+    .import-textarea::placeholder { color: var(--color-faint); }
 
     .import-export-btns {
       display: flex;
@@ -325,8 +336,8 @@
 
     /* ---- Collapsible param sections ---- */
     .param-section {
-      background: #111827;
-      border: 1px solid #1f2937;
+      background: var(--color-card);
+      border: 1px solid var(--color-line);
       border-radius: 8px;
       overflow: hidden;
     }
@@ -340,21 +351,21 @@
       user-select: none;
       transition: background 0.15s;
     }
-    .param-section-header:hover { background: #1a2234; }
+    .param-section-header:hover { background: var(--color-ink-2); }
 
     .param-section-title {
       font-size: 12px;
       font-weight: 600;
-      color: #9ca3af;
+      color: var(--color-muted);
       display: flex;
       align-items: center;
       gap: 6px;
     }
 
-    .param-section-title i { color: #4b5563; font-size: 11px; width: 12px; }
+    .param-section-title i { color: var(--color-faint); font-size: 11px; width: 12px; }
 
     .param-section-chevron {
-      color: #4b5563;
+      color: var(--color-faint);
       font-size: 10px;
       transition: transform 0.2s;
     }
@@ -362,7 +373,7 @@
 
     .param-section-body {
       padding: 12px;
-      border-top: 1px solid #1f2937;
+      border-top: 1px solid var(--color-line);
       display: flex;
       flex-direction: column;
       gap: 10px;
@@ -384,44 +395,45 @@
     .field-label {
       font-size: 11px;
       font-weight: 500;
-      color: #6b7280;
+      color: var(--color-muted);
       text-transform: uppercase;
-      letter-spacing: 0.06em;
+      letter-spacing: 0.08em;
+      font-family: var(--font-mono);
     }
 
     .field-hint {
       font-size: 11px;
       line-height: 1.45;
-      color: #8b93a7;
+      color: var(--color-muted);
       margin-top: 5px;
     }
     .field-hint code {
-      background: #1a2234;
+      background: var(--color-ink-2);
       padding: 1px 4px;
       border-radius: 3px;
-      color: #a5b4fc;
+      color: var(--color-ring-blue);
     }
 
     .field-input {
-      background: #1a1f2e;
-      border: 1px solid #2d3748;
+      background: var(--color-paper);
+      border: 1px solid var(--color-ink-3);
       border-radius: 6px;
-      color: #e5e7eb;
-      font-family: monospace;
+      color: var(--color-fg);
+      font-family: var(--font-mono);
       font-size: 12px;
       padding: 6px 8px;
       outline: none;
       width: 100%;
       transition: border-color 0.2s;
     }
-    .field-input:focus { border-color: #4b5563; }
-    .field-input::placeholder { color: #374151; }
+    .field-input:focus { border-color: var(--color-magenta); }
+    .field-input::placeholder { color: var(--color-faint); }
 
     .field-select {
-      background: #1a1f2e;
-      border: 1px solid #2d3748;
+      background: var(--color-paper);
+      border: 1px solid var(--color-ink-3);
       border-radius: 6px;
-      color: #e5e7eb;
+      color: var(--color-fg);
       font-size: 12px;
       padding: 6px 8px;
       outline: none;
@@ -434,8 +446,8 @@
       background-position: right 8px center;
       padding-right: 24px;
     }
-    .field-select:focus { border-color: #4b5563; }
-    .field-select option { background: #1a1f2e; }
+    .field-select:focus { border-color: var(--color-magenta); }
+    .field-select option { background: var(--color-paper); }
 
     /* Toggle switch */
     .toggle-row {
@@ -447,7 +459,7 @@
 
     .toggle-label {
       font-size: 12px;
-      color: #9ca3af;
+      color: var(--color-muted);
     }
 
     .toggle-switch {
@@ -461,7 +473,7 @@
       position: absolute;
       cursor: pointer;
       inset: 0;
-      background: #2d3748;
+      background: var(--color-ink-3);
       border-radius: 18px;
       transition: background 0.2s;
     }
@@ -472,12 +484,12 @@
       height: 12px;
       left: 3px;
       top: 3px;
-      background: #6b7280;
+      background: var(--color-muted);
       border-radius: 50%;
       transition: transform 0.2s, background 0.2s;
     }
-    .toggle-switch input:checked + .toggle-slider { background: rgba(19, 239, 149, 0.3); }
-    .toggle-switch input:checked + .toggle-slider::before { transform: translateX(14px); background: #13ef95; }
+    .toggle-switch input:checked + .toggle-slider { background: color-mix(in srgb, var(--color-lime) 35%, transparent); }
+    .toggle-switch input:checked + .toggle-slider::before { transform: translateX(14px); background: var(--color-lime); }
 
     /* Checkbox grid */
     .checkbox-grid {
@@ -496,14 +508,14 @@
     .checkbox-item input[type="checkbox"] {
       width: 14px;
       height: 14px;
-      accent-color: #13ef95;
+      accent-color: var(--color-lime);
       cursor: pointer;
       flex-shrink: 0;
     }
 
     .checkbox-item label {
       font-size: 12px;
-      color: #9ca3af;
+      color: var(--color-muted);
       cursor: pointer;
       user-select: none;
     }
@@ -528,7 +540,7 @@
     .keyterm-remove {
       background: none;
       border: none;
-      color: #ef4444;
+      color: var(--color-red);
       cursor: pointer;
       padding: 4px;
       border-radius: 4px;
@@ -548,11 +560,11 @@
     /* ---- Right panel tabs ---- */
     .right-tabs {
       display: flex;
-      border-bottom: 1px solid #1f2937;
+      border-bottom: 1px solid var(--color-line);
       padding: 0 16px;
       gap: 2px;
       flex-shrink: 0;
-      background: #0d1117;
+      background: var(--color-paper);
     }
 
     .right-tab {
@@ -560,7 +572,7 @@
       background: none;
       border: none;
       border-bottom: 2px solid transparent;
-      color: #6b7280;
+      color: var(--color-muted);
       font-size: 13px;
       font-weight: 500;
       cursor: pointer;
@@ -568,10 +580,10 @@
       margin-bottom: -1px;
     }
     .right-tab.active {
-      color: #13ef95;
-      border-bottom-color: #13ef95;
+      color: var(--color-fg);
+      border-bottom-color: var(--color-magenta);
     }
-    .right-tab:hover:not(.active) { color: #9ca3af; }
+    .right-tab:hover:not(.active) { color: var(--color-muted); }
 
     .right-tab-badge {
       display: inline-flex;
@@ -579,15 +591,15 @@
       justify-content: center;
       width: 18px;
       height: 18px;
-      background: #1f2937;
+      background: var(--color-line);
       border-radius: 9px;
       font-size: 10px;
       margin-left: 6px;
-      color: #9ca3af;
+      color: var(--color-muted);
     }
     .right-tab.active .right-tab-badge {
-      background: rgba(19, 239, 149, 0.15);
-      color: #13ef95;
+      background: color-mix(in srgb, var(--color-magenta) 20%, transparent);
+      color: var(--color-fg);
     }
 
     /* ---- Transcript pane ---- */
@@ -612,14 +624,14 @@
       overflow-y: auto;
       font-size: 16px;
       line-height: 1.7;
-      color: #13ef95;
+      color: var(--color-fg);
       padding: 12px;
-      background: rgba(19, 239, 149, 0.04);
-      border: 1px solid rgba(19, 239, 149, 0.12);
+      background: var(--color-card);
+      border: 1px solid var(--color-line);
       border-radius: 8px;
     }
     .transcript-final::-webkit-scrollbar { width: 4px; }
-    .transcript-final::-webkit-scrollbar-thumb { background: #2d3748; border-radius: 2px; }
+    .transcript-final::-webkit-scrollbar-thumb { background: var(--color-ink-3); border-radius: 2px; }
 
     .transcript-interim {
       flex-shrink: 0;
@@ -632,16 +644,17 @@
       font-style: italic;
       padding: 8px 12px;
       background: rgba(255,255,255,0.03);
-      border: 1px solid #1f2937;
+      border: 1px solid var(--color-line);
       border-radius: 6px;
     }
 
     .speaker-label {
       font-size: 11px;
       font-weight: 600;
-      color: #6b7280;
+      color: var(--color-muted);
       text-transform: uppercase;
-      letter-spacing: 0.06em;
+      letter-spacing: 0.08em;
+      font-family: var(--font-mono);
       margin-right: 6px;
     }
 
@@ -670,11 +683,11 @@
       gap: 8px;
     }
     .responses-list::-webkit-scrollbar { width: 4px; }
-    .responses-list::-webkit-scrollbar-thumb { background: #2d3748; border-radius: 2px; }
+    .responses-list::-webkit-scrollbar-thumb { background: var(--color-ink-3); border-radius: 2px; }
 
     .response-card {
-      background: #111827;
-      border: 1px solid #1f2937;
+      background: var(--color-card);
+      border: 1px solid var(--color-line);
       border-radius: 8px;
       overflow: hidden;
       flex-shrink: 0;
@@ -688,7 +701,7 @@
       cursor: pointer;
       transition: background 0.15s;
     }
-    .response-card-header:hover { background: #1a2234; }
+    .response-card-header:hover { background: var(--color-ink-2); }
 
     .response-type-badge {
       font-size: 10px;
@@ -696,35 +709,36 @@
       padding: 2px 6px;
       border-radius: 4px;
       text-transform: uppercase;
-      letter-spacing: 0.06em;
+      letter-spacing: 0.08em;
+      font-family: var(--font-mono);
     }
-    .response-type-badge.interim { background: rgba(245,158,11,0.2); color: #f59e0b; }
-    .response-type-badge.final { background: rgba(19,239,149,0.2); color: #13ef95; }
-    .response-type-badge.error { background: rgba(239,68,68,0.2); color: #ef4444; }
+    .response-type-badge.interim { background: color-mix(in srgb, var(--color-orange) 20%, transparent); color: var(--color-orange); }
+    .response-type-badge.final { background: color-mix(in srgb, var(--color-lime) 20%, transparent); color: var(--color-lime); }
+    .response-type-badge.error { background: color-mix(in srgb, var(--color-red) 20%, transparent); color: var(--color-red); }
 
     .response-time {
       font-size: 11px;
-      color: #4b5563;
-      font-family: monospace;
+      color: var(--color-faint);
+      font-family: var(--font-mono);
     }
 
     .response-preview {
       flex: 1;
       font-size: 11px;
-      color: #6b7280;
+      color: var(--color-muted);
       overflow: hidden;
       text-overflow: ellipsis;
       white-space: nowrap;
     }
 
     .response-card-body {
-      border-top: 1px solid #1f2937;
+      border-top: 1px solid var(--color-line);
     }
 
     /* JSON tree */
     .json-tree {
       padding: 10px 14px;
-      font-family: 'Courier New', monospace;
+      font-family: var(--font-mono);
       font-size: 11px;
       line-height: 1.6;
       overflow-x: auto;
@@ -732,19 +746,19 @@
       overflow-y: auto;
     }
     .json-tree::-webkit-scrollbar { width: 4px; height: 4px; }
-    .json-tree::-webkit-scrollbar-thumb { background: #2d3748; border-radius: 2px; }
+    .json-tree::-webkit-scrollbar-thumb { background: var(--color-ink-3); border-radius: 2px; }
 
     .jt-line { display: flex; align-items: flex-start; gap: 2px; }
     .jt-indent { display: inline-block; width: 16px; flex-shrink: 0; }
-    .jt-key { color: #9ca3af; }
-    .jt-colon { color: #4b5563; margin: 0 2px; }
-    .jt-str { color: #10b981; }
-    .jt-num { color: #f59e0b; }
-    .jt-bool { color: #8b5cf6; }
-    .jt-null { color: #ef4444; font-style: italic; }
-    .jt-brace { color: #6b7280; }
-    .jt-toggle { cursor: pointer; color: #47aca9; width: 14px; text-align: center; flex-shrink: 0; font-size: 9px; }
-    .jt-count { color: #4b5563; font-size: 10px; margin-left: 4px; }
+    .jt-key { color: var(--color-ring-blue); }
+    .jt-colon { color: var(--color-faint); margin: 0 2px; }
+    .jt-str { color: var(--color-lime); }
+    .jt-num { color: var(--color-yellow); }
+    .jt-bool { color: var(--color-orange); }
+    .jt-null { color: var(--color-red); font-style: italic; }
+    .jt-brace { color: var(--color-muted); }
+    .jt-toggle { cursor: pointer; color: var(--color-ring-blue); width: 14px; text-align: center; flex-shrink: 0; font-size: 9px; }
+    .jt-count { color: var(--color-faint); font-size: 10px; margin-left: 4px; }
     .jt-block { margin-left: 16px; }
     .jt-block.collapsed { display: none; }
 
@@ -755,7 +769,7 @@
       flex-direction: column;
       align-items: center;
       justify-content: center;
-      color: #374151;
+      color: var(--color-muted);
       gap: 10px;
     }
     .empty-state i { font-size: 32px; }
@@ -766,27 +780,27 @@
       position: fixed;
       bottom: 20px;
       right: 20px;
-      background: #1e293b;
-      border: 1px solid #2d3748;
+      background: var(--color-ink-2);
+      border: 1px solid var(--color-ink-3);
       border-radius: 8px;
       padding: 10px 16px;
       font-size: 13px;
-      color: #e5e7eb;
+      color: var(--color-fg);
       z-index: 1000;
       display: flex;
       align-items: center;
       gap: 8px;
       box-shadow: 0 4px 20px rgba(0,0,0,0.5);
     }
-    .toast.success { border-color: #13ef95; color: #13ef95; }
-    .toast.error { border-color: #ef4444; color: #fca5a5; }
-    .toast.warning { border-color: #f59e0b; color: #fcd34d; }
+    .toast.success { border-color: var(--color-lime); color: var(--color-lime); }
+    .toast.error { border-color: var(--color-red); color: var(--color-red); }
+    .toast.warning { border-color: var(--color-orange); color: var(--color-orange); }
 
     /* ---- Misc ---- */
-    .text-muted { color: #6b7280; }
+    .text-muted { color: var(--color-muted); }
     .text-sm { font-size: 11px; }
     .mt-2 { margin-top: 8px; }
-    .divider { height: 1px; background: #1f2937; margin: 4px 0; }
+    .divider { height: 1px; background: var(--color-line); margin: 4px 0; }
 
     /* ---- Access-tier banner ---- */
     .tier-banner {
@@ -796,14 +810,14 @@
       gap: 10px;
       padding: 8px 18px;
       font-size: 13px;
-      background: #1e293b;
-      color: #cbd5e1;
-      border-bottom: 1px solid #2d3748;
+      background: var(--color-ink-2);
+      color: var(--color-fg);
+      border-bottom: 1px solid var(--color-ink-3);
     }
     .tier-banner-limit {
-      background: #3a1d22;
-      color: #fca5a5;
-      border-bottom-color: #5c2b33;
+      background: color-mix(in srgb, var(--color-red) 15%, var(--color-paper));
+      color: var(--color-fg);
+      border-bottom-color: color-mix(in srgb, var(--color-red) 40%, transparent);
     }
     .tier-unlock {
       display: flex;
@@ -812,9 +826,47 @@
       margin-left: auto;
     }
     .tier-unlock .field-input { width: 200px; }
-    .tier-unlock-error { color: #fca5a5; }
+    .tier-unlock-error { color: var(--color-red); }
 
     [x-cloak] { display: none !important; }
+
+    /* ---- Brand row (top of the left panel) ---- */
+    .brand-row {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 10px;
+      padding: 6px 4px 2px;
+    }
+    .brand-row img { height: 18px; width: auto; display: block; }
+    .brand-row .label { color: var(--color-muted); }
+
+    /* ---- Footer links ---- */
+    .footer-links {
+      flex-shrink: 0;
+      padding: 10px 12px 12px;
+      border-top: 1px solid var(--color-line);
+      margin-top: 4px;
+    }
+    .footer-links > div { display: flex; flex-wrap: wrap; gap: 6px 10px; align-items: center; }
+    .footer-link {
+      display: flex; align-items: center; gap: 5px;
+      color: var(--color-muted); font-size: 11px; text-decoration: none;
+    }
+    .footer-link:hover { color: var(--color-fg); }
+    .footer-sep { color: var(--color-faint); }
+
+    /* ---- Inline notices ---- */
+    .lang-warning {
+      background: color-mix(in srgb, var(--color-orange) 15%, var(--color-card));
+      border: 1px solid color-mix(in srgb, var(--color-orange) 45%, transparent);
+      border-radius: 6px; padding: 6px 10px; font-size: 12px; color: var(--color-fg);
+    }
+    .lang-warning i { color: var(--color-orange); }
+    .group-label {
+      font-family: var(--font-mono); font-size: 10px; font-weight: 500; color: var(--color-muted);
+      text-transform: uppercase; letter-spacing: 0.08em; margin-bottom: 3px;
+    }
 
     /* Streaming indicator */
     .stream-indicator {
@@ -822,9 +874,9 @@
       align-items: center;
       gap: 6px;
       font-size: 12px;
-      color: #6b7280;
+      color: var(--color-muted);
       padding: 0 12px;
-      border-bottom: 1px solid #1f2937;
+      border-bottom: 1px solid var(--color-line);
       height: 32px;
       flex-shrink: 0;
     }
@@ -833,9 +885,9 @@
       overflow: hidden;
       text-overflow: ellipsis;
       white-space: nowrap;
-      font-family: monospace;
+      font-family: var(--font-mono);
       font-size: 11px;
-      color: #4b5563;
+      color: var(--color-faint);
     }
 
     /* Detect settings button */
@@ -856,37 +908,37 @@
       align-items: center;
       gap: 4px;
       padding: 2px 8px;
-      background: #1a1f2e;
-      border: 1px solid #2d3748;
+      background: var(--color-paper);
+      border: 1px solid var(--color-ink-3);
       border-radius: 12px;
       font-size: 11px;
-      color: #9ca3af;
+      color: var(--color-muted);
     }
     .pill button {
       background: none;
       border: none;
-      color: #6b7280;
+      color: var(--color-muted);
       cursor: pointer;
       padding: 0;
       font-size: 10px;
       line-height: 1;
     }
-    .pill button:hover { color: #ef4444; }
+    .pill button:hover { color: var(--color-red); }
 
     /* Batch response area */
     .batch-result {
       flex: 1;
       overflow-y: auto;
-      background: #111827;
-      border: 1px solid #1f2937;
+      background: var(--color-card);
+      border: 1px solid var(--color-line);
       border-radius: 8px;
     }
 
     /* ---- TTS Diff card ---- */
     .tts-diff-card {
       flex-shrink: 0;
-      background: #0d1117;
-      border-top: 1px solid #1f2937;
+      background: var(--color-paper);
+      border-top: 1px solid var(--color-line);
       padding: 10px 14px;
       font-size: 13px;
     }
@@ -894,10 +946,11 @@
       display: flex;
       align-items: center;
       justify-content: space-between;
-      color: #6b7280;
+      color: var(--color-muted);
       font-size: 11px;
       text-transform: uppercase;
-      letter-spacing: 0.05em;
+      letter-spacing: 0.08em;
+      font-family: var(--font-mono);
       margin-bottom: 8px;
     }
     .diff-row {
@@ -911,23 +964,24 @@
     .diff-label {
       flex-shrink: 0;
       width: 88px;
-      color: #6b7280;
+      color: var(--color-muted);
       font-size: 11px;
       text-transform: uppercase;
-      letter-spacing: 0.04em;
+      letter-spacing: 0.08em;
+      font-family: var(--font-mono);
       padding-top: 1px;
     }
-    .diff-text { color: #e5e7eb; word-break: break-word; }
-    .diff-equal { color: #9ca3af; }
-    .diff-delete { color: #f87171; text-decoration: line-through; }
-    .diff-insert { color: #4ade80; }
-    .diff-arrow { color: #6b7280; font-size: 10px; margin: 0 1px; }
+    .diff-text { color: var(--color-fg); word-break: break-word; }
+    .diff-equal { color: var(--color-muted); }
+    .diff-delete { color: var(--color-red); text-decoration: line-through; }
+    .diff-insert { color: var(--color-lime); }
+    .diff-arrow { color: var(--color-muted); font-size: 10px; margin: 0 1px; }
 
     /* ---- Interim debug panel ---- */
     .debug-panel {
       flex-shrink: 0;
-      background: #0d1117;
-      border: 1px solid #1f2937;
+      background: var(--color-paper);
+      border: 1px solid var(--color-line);
       border-radius: 6px;
       overflow: hidden;
     }
@@ -939,11 +993,11 @@
       padding: 6px 10px;
       cursor: pointer;
       font-size: 11px;
-      color: #4b5563;
+      color: var(--color-faint);
       user-select: none;
       transition: background 0.15s;
     }
-    .debug-panel-header:hover { background: #111827; }
+    .debug-panel-header:hover { background: var(--color-card); }
     .debug-panel-header i.fa-chevron-down { margin-left: auto; transition: transform 0.2s; }
     .debug-panel-header i.fa-chevron-down.open { transform: rotate(180deg); }
 
@@ -951,22 +1005,22 @@
       max-height: 180px;
       overflow-y: auto;
       padding: 4px 0;
-      border-top: 1px solid #1f2937;
+      border-top: 1px solid var(--color-line);
     }
     .debug-panel-body::-webkit-scrollbar { width: 4px; }
-    .debug-panel-body::-webkit-scrollbar-thumb { background: #2d3748; border-radius: 2px; }
+    .debug-panel-body::-webkit-scrollbar-thumb { background: var(--color-ink-3); border-radius: 2px; }
 
     .debug-entry {
       display: flex;
       gap: 8px;
-      font-family: monospace;
+      font-family: var(--font-mono);
       font-size: 11px;
       padding: 2px 10px;
       line-height: 1.5;
-      border-bottom: 1px solid #0f1923;
+      border-bottom: 1px solid var(--color-line);
     }
     .debug-entry:last-child { border-bottom: none; }
-    .debug-time { color: #4b5563; flex-shrink: 0; }
+    .debug-time { color: var(--color-faint); flex-shrink: 0; }
     .debug-tag {
       flex-shrink: 0;
       font-size: 10px;
@@ -975,10 +1029,10 @@
       border-radius: 3px;
       align-self: center;
     }
-    .debug-tag.interim { background: rgba(245,158,11,0.15); color: #f59e0b; }
-    .debug-tag.final   { background: rgba(19,239,149,0.15);  color: #13ef95; }
-    .debug-text.interim { color: rgba(245,158,11,0.8); }
-    .debug-text.final   { color: rgba(19,239,149,0.9); }
+    .debug-tag.interim { background: color-mix(in srgb, var(--color-orange) 15%, transparent); color: var(--color-orange); }
+    .debug-tag.final   { background: color-mix(in srgb, var(--color-lime) 15%, transparent);  color: var(--color-lime); }
+    .debug-text.interim { color: var(--color-orange); }
+    .debug-text.final   { color: var(--color-lime); }
 
     /* File streaming state badge */
     .file-state {
@@ -987,10 +1041,10 @@
       border-radius: 4px;
       font-weight: 500;
     }
-    .file-state.idle { background: #1f2937; color: #6b7280; }
-    .file-state.streaming { background: rgba(245,158,11,0.15); color: #f59e0b; }
-    .file-state.done { background: rgba(19,239,149,0.15); color: #13ef95; }
-    .file-state.error { background: rgba(239,68,68,0.15); color: #fca5a5; }
+    .file-state.idle { background: var(--color-line); color: var(--color-muted); }
+    .file-state.streaming { background: color-mix(in srgb, var(--color-orange) 15%, transparent); color: var(--color-orange); }
+    .file-state.done { background: color-mix(in srgb, var(--color-lime) 15%, transparent); color: var(--color-lime); }
+    .file-state.error { background: color-mix(in srgb, var(--color-red) 15%, transparent); color: var(--color-red); }
   </style>
 </head>
 <body x-data="appData()" x-init="init()">
@@ -1040,19 +1094,25 @@
     <div class="left-panel">
       <div class="left-panel-inner">
 
+        <!-- Brand -->
+        <div class="brand-row">
+          <img src="/static/vdui/logos/deepgram.svg" alt="Deepgram">
+          <span class="label">STT explorer</span>
+        </div>
+
         <!-- Mode tabs -->
         <div class="mode-tabs">
           <button class="mode-tab" :class="mode==='mic' && 'active'" @click="setMode('mic')">
             <i class="fas fa-microphone"></i> Microphone
           </button>
           <button class="mode-tab" :class="mode==='file' && 'active'" @click="setMode('file')">
-            <i class="fas fa-file-audio"></i> File Stream
+            <i class="fas fa-file-audio"></i> File stream
           </button>
           <button class="mode-tab" :class="mode==='batch' && 'active'" @click="setMode('batch')">
             <i class="fas fa-layer-group"></i> Batch
           </button>
           <button class="mode-tab" :class="mode==='tts' && 'active'" @click="setMode('tts')">
-            <i class="fas fa-comment-dots"></i> TTS Test
+            <i class="fas fa-comment-dots"></i> TTS test
           </button>
         </div>
 
@@ -1074,11 +1134,11 @@
                   :class="recording ? 'btn-danger recording' : 'btn-primary'"
                   @click="recording ? stopMic() : startMic()">
                   <i :class="recording ? 'fas fa-stop' : 'fas fa-microphone'"></i>
-                  <span x-text="recording ? 'Stop Recording' : 'Start Recording'"></span>
+                  <span x-text="recording ? 'Stop recording' : 'Start recording'"></span>
                 </button>
                 <div class="mt-2">
                   <button class="action-btn btn-secondary detect-btn" @click="detectAudioSettings()">
-                    <i class="fas fa-sliders-h"></i> Detect Audio Settings
+                    <i class="fas fa-sliders-h"></i> Detect audio settings
                   </button>
                 </div>
               </div>
@@ -1167,7 +1227,7 @@
                   <div style="display:flex;gap:3px;flex-wrap:wrap;">
                     <template x-for="l in dgVoiceLangs" :key="l.code">
                       <button class="action-btn btn-sm"
-                        :class="ttsLang === l.code ? 'btn-primary' : 'btn-secondary'"
+                        :class="ttsLang === l.code ? 'btn-selected' : 'btn-secondary'"
                         style="padding:3px 8px;font-size:12px;"
                         @click="switchTtsLang(l.code)"
                         x-text="l.label">
@@ -1178,7 +1238,7 @@
                 <div class="field">
                   <div class="field-label">Voice</div>
                   <select class="field-input" x-model="ttsModel"
-                    style="background:#111827;color:#e5e7eb;border:1px solid #374151;padding:6px 8px;border-radius:6px;">
+                    style="padding:6px 8px;border-radius:6px;">
                     <template x-for="v in filteredDgVoices()" :key="v.id">
                       <option :value="v.id"
                         x-text="`${v.name} (${v.accent}, ${v.gender === 'M' ? 'Male' : v.gender === 'F' ? 'Female' : v.gender})`">
@@ -1187,11 +1247,11 @@
                   </select>
                 </div>
                 <div class="field">
-                  <div class="field-label">STT Mode</div>
+                  <div class="field-label">STT mode</div>
                   <div style="display:flex;gap:4px;">
                     <template x-for="m in ['batch','streaming','both']" :key="m">
                       <button class="action-btn btn-sm"
-                        :class="ttsMode === m ? 'btn-primary' : 'btn-secondary'"
+                        :class="ttsMode === m ? 'btn-selected' : 'btn-secondary'"
                         style="flex:1;text-transform:capitalize;"
                         @click="ttsMode = m"
                         x-text="m">
@@ -1201,7 +1261,7 @@
                 </div>
                 <!-- Language mismatch warning -->
                 <div x-show="params.language && params.language !== ttsLang && params.language !== 'multi'"
-                  style="background:#78350f;border:1px solid #92400e;border-radius:6px;padding:6px 10px;font-size:12px;color:#fbbf24;">
+                  class="lang-warning">
                   <i class="fas fa-exclamation-triangle" style="margin-right:4px;"></i>
                   TTS language (<span x-text="ttsLang"></span>) differs from STT language (<span x-text="params.language"></span>).
                   Transcription may be inaccurate.
@@ -1210,7 +1270,7 @@
                   :disabled="ttsLoading || !ttsText.trim() || !ttsModel"
                   @click="runTts()">
                   <i :class="ttsLoading ? 'fas fa-spinner fa-spin' : 'fas fa-comment-dots'"></i>
-                  <span x-text="ttsLoading ? 'Generating...' : 'Speak & Transcribe'"></span>
+                  <span x-text="ttsLoading ? 'Generating…' : 'Speak & transcribe'"></span>
                 </button>
               </div>
             </template>
@@ -1223,7 +1283,7 @@
           <div class="import-export-header"
             :class="importExportOpen && 'open'"
             @click="importExportOpen = !importExportOpen">
-            <span class="import-export-title"><i class="fas fa-exchange-alt" style="margin-right:6px;"></i>Import / Export</span>
+            <span class="import-export-title"><i class="fas fa-exchange-alt" style="margin-right:6px;"></i>Import / export</span>
             <i class="fas fa-chevron-down param-section-chevron" :class="importExportOpen && 'open'"></i>
           </div>
           <div x-show="importExportOpen" x-cloak class="import-export-body">
@@ -1287,13 +1347,13 @@
         <div class="param-section" x-show="isFlux">
           <div class="param-section-header" @click="sections.flux = !sections.flux">
             <div class="param-section-title">
-              <i class="fas fa-comments"></i> Flux End-of-Turn
+              <i class="fas fa-comments"></i> Flux end-of-turn
             </div>
             <i class="fas fa-chevron-down param-section-chevron" :class="sections.flux && 'open'"></i>
           </div>
           <div x-show="sections.flux" class="param-section-body">
             <div class="field-hint" x-show="fluxWarning" x-text="fluxWarning"
-                 style="color: var(--error, #e5484d); margin-bottom: 8px;"></div>
+                 style="color: var(--color-red); margin-bottom: 8px;"></div>
             <div class="field-row">
               <div class="field">
                 <div class="field-label">eot_threshold</div>
@@ -1335,7 +1395,7 @@
           <div x-show="sections.audio" class="param-section-body">
             <div class="field-row">
               <div class="field" x-show="showParam('sample_rate')">
-                <div class="field-label">Sample Rate</div>
+                <div class="field-label">Sample rate</div>
                 <input class="field-input" type="number" x-model.number="params.sample_rate" placeholder="16000">
               </div>
               <div class="field" x-show="showParam('channels')">
@@ -1484,7 +1544,7 @@
             <!-- Entity types when detect_entities enabled -->
             <template x-if="params.detect_entities && showParam('entity_prompt')">
               <div class="mt-2">
-                <div class="field-label" style="margin-bottom:6px;">Entity Prompt</div>
+                <div class="field-label" style="margin-bottom:6px;">Entity prompt</div>
                 <input class="field-input" x-model="params.entity_prompt" placeholder="custom entity prompt...">
               </div>
             </template>
@@ -1514,11 +1574,11 @@
               <button class="action-btn btn-sm btn-secondary" style="padding:2px 6px;font-size:10px;"
                 @click="redactOptions.filter(o => redactAllowed(o.value)).forEach(o => { if (!params.redact.includes(o.value)) toggleRedact(o.value, true) })">Select All</button>
               <button class="action-btn btn-sm btn-secondary" style="padding:2px 6px;font-size:10px;"
-                @click="params.redact = []">Clear All</button>
+                @click="params.redact = []">Clear all</button>
             </div>
             <template x-for="grp in redactGroups()" :key="grp">
               <div style="margin-bottom:6px;">
-                <div style="font-size:10px;font-weight:700;color:#9ca3af;text-transform:uppercase;letter-spacing:0.5px;margin-bottom:3px;" x-text="grp"></div>
+                <div class="group-label" x-text="grp"></div>
                 <div class="checkbox-grid">
                   <template x-for="opt in redactOptions.filter(o => o.group === grp && redactAllowed(o.value))" :key="opt.value">
                     <div class="checkbox-item">
@@ -1674,40 +1734,35 @@
         </div>
 
         <!-- Footer links -->
-        <div style="flex-shrink:0;padding:10px 12px 12px;border-top:1px solid #1f2937;margin-top:4px;">
-          <div style="display:flex;flex-wrap:wrap;gap:6px 10px;align-items:center;">
+        <div class="footer-links">
+          <div>
             <a href="https://github.com/Jacob-Lasky/deepgram-python-stt" target="_blank" rel="noopener"
-              style="display:flex;align-items:center;gap:5px;color:#6b7280;font-size:11px;text-decoration:none;"
-              title="This repo"
-              onmouseover="this.style.color='#9ca3af'" onmouseout="this.style.color='#6b7280'">
+              class="footer-link"
+              title="This repo">
               <i class="fab fa-github"></i> This repo
             </a>
-            <span style="color:#374151;">·</span>
+            <span class="footer-sep">·</span>
             <a href="https://github.com/deepgram" target="_blank" rel="noopener"
-              style="display:flex;align-items:center;gap:5px;color:#6b7280;font-size:11px;text-decoration:none;"
-              title="Deepgram GitHub"
-              onmouseover="this.style.color='#9ca3af'" onmouseout="this.style.color='#6b7280'">
+              class="footer-link"
+              title="Deepgram GitHub">
               <i class="fab fa-github"></i> deepgram
             </a>
-            <span style="color:#374151;">·</span>
+            <span class="footer-sep">·</span>
             <a href="https://github.com/deepgram-devs" target="_blank" rel="noopener"
-              style="display:flex;align-items:center;gap:5px;color:#6b7280;font-size:11px;text-decoration:none;"
-              title="Deepgram Devs GitHub"
-              onmouseover="this.style.color='#9ca3af'" onmouseout="this.style.color='#6b7280'">
+              class="footer-link"
+              title="Deepgram Devs GitHub">
               <i class="fab fa-github"></i> deepgram-devs
             </a>
-            <span style="color:#374151;">·</span>
+            <span class="footer-sep">·</span>
             <a href="https://developers.deepgram.com/" target="_blank" rel="noopener"
-              style="display:flex;align-items:center;gap:5px;color:#6b7280;font-size:11px;text-decoration:none;"
-              title="Deepgram Docs"
-              onmouseover="this.style.color='#9ca3af'" onmouseout="this.style.color='#6b7280'">
+              class="footer-link"
+              title="Deepgram Docs">
               <i class="fas fa-book"></i> Docs
             </a>
-            <span style="color:#374151;">·</span>
+            <span class="footer-sep">·</span>
             <a href="https://community.deepgram.com/" target="_blank" rel="noopener"
-              style="display:flex;align-items:center;gap:5px;color:#6b7280;font-size:11px;text-decoration:none;"
-              title="Deepgram Community"
-              onmouseover="this.style.color='#9ca3af'" onmouseout="this.style.color='#6b7280'">
+              class="footer-link"
+              title="Deepgram Community">
               <i class="fas fa-comments"></i> Community
             </a>
           </div>
@@ -1747,14 +1802,14 @@
           Transcript
         </button>
         <button class="right-tab" :class="rightTab === 'responses' && 'active'" @click="rightTab = 'responses'">
-          API Responses
+          API responses
           <span class="right-tab-badge" x-text="responses.length"></span>
         </button>
         <button class="right-tab" :class="rightTab === 'batch' && 'active'" @click="rightTab = 'batch'" x-show="mode === 'batch'">
           Batch Result
         </button>
         <button class="right-tab" :class="rightTab === 'tts' && 'active'" @click="rightTab = 'tts'" x-show="mode === 'tts'">
-          TTS Result
+          TTS result
         </button>
       </div>
 
@@ -1786,7 +1841,7 @@
           <div class="debug-panel" x-show="interimLog.length > 0 || debugPanelOpen">
             <div class="debug-panel-header" @click="debugPanelOpen = !debugPanelOpen">
               <i class="fas fa-bug"></i>
-              <span>Interim Log</span>
+              <span>Interim log</span>
               <span class="right-tab-badge" x-text="interimLog.length"></span>
               <i class="fas fa-chevron-down" :class="debugPanelOpen && 'open'"></i>
             </div>
@@ -1916,7 +1971,7 @@
           <template x-if="!ttsResult">
             <div class="empty-state" style="flex:1;">
               <i class="fas fa-comment-dots"></i>
-              <p>Enter text and click Speak &amp; Transcribe to test.</p>
+              <p>Enter text and click Speak &amp; transcribe to test.</p>
             </div>
           </template>
           <template x-if="ttsResult">
